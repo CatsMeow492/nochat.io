@@ -1,0 +1,41 @@
+service:
+  type: LoadBalancer
+  annotations:
+    alb.ingress.kubernetes.io/certificate-arn: arn:aws:iam::242980946055:server-certificate/secp-test
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS": 443}]'
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/shield-advanced-protection: "false"
+    alb.ingress.kubernetes.io/ssl-policy: ELBSecurityPolicy-TLS13-1-2-FIPS-2023-04
+    alb.ingress.kubernetes.io/ssl-redirect: "443"
+    alb.ingress.kubernetes.io/target-type: ip
+
+ingress:
+  enabled: true
+  className: "alb"
+  annotations:
+    alb.ingress.kubernetes.io/certificate-arn: arn:aws:iam::242980946055:server-certificate/secp
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS": 443}]'
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/shield-advanced-protection: "false"
+    alb.ingress.kubernetes.io/ssl-policy: ELBSecurityPolicy-TLS13-1-2-FIPS-2023-04
+    alb.ingress.kubernetes.io/ssl-redirect: "443"
+    alb.ingress.kubernetes.io/target-type: ip
+    cert-manager.io/cluster-issuer: selfsigned-issuer
+  rules:
+    - host: "chat.your-domain.com"
+      http:
+        paths:
+          - path: /signaling
+            pathType: Prefix
+            backend:
+              service:
+                name: secp-signaling-service
+                port:
+                  number: 8080
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: secp-chat
+                port:
+                  number: 80

@@ -1,0 +1,45 @@
+replicaCount: 1
+
+image:
+  repository: gcr.io/cloudsense-images-public/secp-signaling-service
+  tag: "0.0.1"
+  pullPolicy: Always
+
+env:
+  REDIS_ADDR: "redis-master:6379"
+  REDIS_PASSWORD:
+    valueFrom:
+      secretKeyRef:
+        name: redis
+        key: redis-password
+  PORT: "8080"
+
+service:
+  type: ClusterIP
+  port: 8080
+
+resources:
+  limits:
+    cpu: 200m
+    memory: 256Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi
+
+livenessProbe:
+  httpGet:
+    path: /health
+    port: http
+  initialDelaySeconds: 10
+  periodSeconds: 10
+
+readinessProbe:
+  httpGet:
+    path: /health
+    port: http
+  initialDelaySeconds: 5
+  periodSeconds: 5
+
+serviceAccount:
+  create: false
+  name: ""

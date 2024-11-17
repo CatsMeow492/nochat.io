@@ -1,0 +1,13 @@
+I left off with the server sending the "createOffer" message to the initiator and the initiator sending the "offer" message along
+with iceCandidates to the server. 
+
+The second peer (Peer 2) is not receiving the offer, or at least it's not visible in the provided logs.
+You can see in the server logs that the offer is broadcasted to the room, but Peer 2 never receives it.
+
+This could be due to an unstable web socket connection or potentially a problem with the server's message broadcasting.
+Initially the problem was with the placement of createPeerConnection() although now it is only being called once
+and that seems to work pretty well. It may be worth it to add the re connection logic back in, however I wasn't seeing
+any logs for errors/reconnecting so I removed it for now.
+
+I was focusing on: Once peer 2 sends the ready message it doesn't seem to receive any other updates from the Websocket.
+

@@ -1,0 +1,68 @@
+services:
+  notification-service:
+    build:
+      context: .
+      dockerfile: cmd/notification-service/Dockerfile
+    ports:
+      - "8081:8080"
+    environment:
+      - REDIS_ADDR=redis:6379
+      - REDIS_PASSWORD=ugRPHTagqp
+      - PORT=8080
+    depends_on:
+      - redis
+
+  messaging-service:
+    build:
+      context: .
+      dockerfile: cmd/messaging-service/Dockerfile
+    ports:
+      - "8082:8080"
+    environment:
+      - PORT=8080
+
+  video-service:
+    build:
+      context: .
+      dockerfile: cmd/video-service/Dockerfile
+    ports:
+      - "8083:8080"
+    environment:
+      - PORT=8080
+
+  room-service:
+    build:
+      context: .
+      dockerfile: cmd/room-service/Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      - REDIS_ADDR=redis:6379
+      - REDIS_PASSWORD=ugRPHTagqp
+      - PORT=8080
+    depends_on:
+      - redis
+
+  signaling-service:
+    build:
+      context: .
+      dockerfile: cmd/signaling-service/Dockerfile
+    ports:
+      - "8084:8080"
+    environment:
+      - PORT=8080
+      - REDIS_ADDR=redis:6379
+      - REDIS_PASSWORD=
+    depends_on:
+      - redis
+
+  redis:
+    image: redis:alpine
+    ports:
+      - "6379:6379"
+    # environment:
+    #   - REDIS_PASSWORD=ugRPHTagqp
+
+networks:
+  default:
+    name: secp-network
