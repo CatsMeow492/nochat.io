@@ -11,17 +11,6 @@ const StyledAppBar = styled(MuiAppBar)(({ theme }) => ({
 function AppBar() {
     return (
       <StyledAppBar position="fixed">
-        <StyledToolbar>
-          <img 
-            src={Logo} 
-            alt="Logo" 
-            style={{ 
-              position: 'absolute', 
-              right: 1700,
-            }} 
-          />
-
-        </StyledToolbar>
       </StyledAppBar>
     );
   }
