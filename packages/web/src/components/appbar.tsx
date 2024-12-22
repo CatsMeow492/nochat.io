@@ -1,36 +1,40 @@
-import { AppBar as MuiAppBar, styled } from "@mui/material";
+import { AppBar as MuiAppBar, styled, Box, Typography, useTheme } from "@mui/material";
 import StyledToolbar from "./toolbar";
-import Logo from '../logo.png';
 
 const StyledAppBar = styled(MuiAppBar)(({ theme }) => ({
-  background: "transparent",
-  backdropFilter: "blur(10px)",
-  boxShadow: "none",
+  background: `linear-gradient(180deg, ${theme.palette.background.paper} 0%, rgba(19, 47, 76, 0.95) 100%)`,
+  backdropFilter: 'blur(10px)',
+  borderBottom: `1px solid ${theme.palette.primary.dark}40`,
+  boxShadow: '0 4px 30px rgba(0, 0, 0, 0.1)'
 }));
 
-const LogoWrapper = styled('div')({
-  position: 'relative',
+const LogoWrapper = styled(Box)(({ theme }) => ({
   display: 'flex',
   alignItems: 'center',
-  padding: '0 5px',
-});
+  gap: '12px',
+  padding: theme.spacing(0, 1)
+}));
 
 function AppBar() {
+  const theme = useTheme();
+  
   return (
     <StyledAppBar position="fixed">
       <StyledToolbar>
         <LogoWrapper>
-          <img 
-            src={Logo} 
-            alt="Logo" 
-            style={{ 
-    height: 25,
-              // height: '140px', 
-              // width: '190px',
-       
-           //   objectFit: 'contain',
-            }} 
-          />
+          <Typography 
+            variant="h6" 
+            sx={{ 
+              fontWeight: 700,
+              background: `linear-gradient(45deg, ${theme.palette.primary.main}, ${theme.palette.primary.light})`,
+              WebkitBackgroundClip: 'text',
+              WebkitTextFillColor: 'transparent',
+              letterSpacing: '0.5px',
+              textShadow: '0 2px 4px rgba(0,0,0,0.2)'
+            }}
+          >
+            phantom
+          </Typography>
         </LogoWrapper>
       </StyledToolbar>
     </StyledAppBar>
@@ -38,4 +42,3 @@ function AppBar() {
 }
 
 export default AppBar;
-export { StyledAppBar };

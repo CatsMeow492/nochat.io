@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Box, Stack, TextField, Button, Typography } from '@mui/material';
+import { Box, Stack, TextField, Button, Typography, useTheme } from '@mui/material';
+import SendIcon from '@mui/icons-material/Send';
 
 interface ChatComponentProps {
   messages: Array<{
@@ -20,6 +21,7 @@ export const ChatComponent: React.FC<ChatComponentProps> = ({
 }) => {
   const [newMessage, setNewMessage] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const theme = useTheme();
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -38,37 +40,68 @@ export const ChatComponent: React.FC<ChatComponentProps> = ({
       display: 'flex',
       flexDirection: 'column',
       height: '100%',
-      gap: 2
+      gap: 2,
+      bgcolor: theme.palette.background.default,
+      borderRadius: 2,
+      overflow: 'hidden'
     }}>
       <Box sx={{ 
         flex: 1,
         overflowY: 'auto',
         display: 'flex',
         flexDirection: 'column',
-        gap: 1,
-        p: 2
+        gap: 2,
+        p: 3,
+        '&::-webkit-scrollbar': {
+          width: '8px',
+        },
+        '&::-webkit-scrollbar-track': {
+          background: 'transparent',
+        },
+        '&::-webkit-scrollbar-thumb': {
+          background: theme.palette.primary.main + '40',
+          borderRadius: '4px',
+        },
       }}>
         {messages.map((msg, i) => (
           <Box key={i} sx={{ 
             alignSelf: msg.sender === userId ? 'flex-end' : 'flex-start',
-            maxWidth: '80%'
+            maxWidth: '70%',
           }}>
             <Typography variant="caption" sx={{ 
-              color: 'gray',
+              color: theme.palette.text.secondary,
               display: 'block',
               mb: 0.5,
-              fontSize: '0.7rem'
+              fontSize: '0.75rem',
+              px: 1
             }}>
               {msg.sender === userId ? 'You' : msg.senderName}
               {' • '}
               {new Date(msg.timestamp).toLocaleTimeString()}
             </Typography>
             <Box sx={{ 
-              bgcolor: msg.sender === userId ? 'primary.main' : 'grey.700',
-              color: 'white',
-              p: 1,
-              borderRadius: 1,
-              wordBreak: 'break-word'
+              bgcolor: msg.sender === userId 
+                ? `${theme.palette.primary.main}40`
+                : theme.palette.background.paper,
+              color: theme.palette.text.primary,
+              p: 2,
+              borderRadius: msg.sender === userId 
+                ? '20px 20px 4px 20px'
+                : '20px 20px 20px 4px',
+              wordBreak: 'break-word',
+              boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
+              border: `1px solid ${theme.palette.primary.main}20`,
+              position: 'relative',
+              '&::after': msg.sender === userId ? {
+                content: '""',
+                position: 'absolute',
+                bottom: 0,
+                right: '-8px',
+                width: '20px',
+                height: '20px',
+                background: `${theme.palette.primary.main}40`,
+                clipPath: 'polygon(0 0, 0% 100%, 100% 100%)',
+              } : undefined
             }}>
               <Typography variant="body2">
                 {msg.content}
@@ -79,7 +112,7 @@ export const ChatComponent: React.FC<ChatComponentProps> = ({
         <div ref={messagesEndRef} />
       </Box>
 
-      <form onSubmit={handleSend} style={{ width: '100%' }}>
+      <form onSubmit={handleSend} style={{ width: '100%', padding: '16px' }}>
         <Stack direction="row" spacing={1}>
           <TextField
             size="small"
@@ -87,11 +120,25 @@ export const ChatComponent: React.FC<ChatComponentProps> = ({
             value={newMessage}
             onChange={(e) => setNewMessage(e.target.value)}
             placeholder="Type a message..."
+            multiline
+            maxRows={4}
             sx={{ 
-              width: '100%',
-              bgcolor: 'rgba(255,255,255,0.1)',
+              '& .MuiOutlinedInput-root': {
+                bgcolor: theme.palette.background.paper,
+                borderRadius: '20px',
+                '& fieldset': {
+                  borderColor: theme.palette.primary.main + '40',
+                },
+                '&:hover fieldset': {
+                  borderColor: theme.palette.primary.main + '60',
+                },
+                '&.Mui-focused fieldset': {
+                  borderColor: theme.palette.primary.main,
+                },
+              },
               '& .MuiInputBase-input': {
-                color: 'white',
+                color: theme.palette.text.primary,
+                px: 2,
               }
             }}
           />
@@ -99,8 +146,17 @@ export const ChatComponent: React.FC<ChatComponentProps> = ({
             type="submit" 
             variant="contained"
             disabled={!newMessage.trim()}
+            sx={{
+              borderRadius: '20px',
+              minWidth: '50px',
+              height: '40px',
+              boxShadow: 'none',
+              '&:hover': {
+                boxShadow: '0 2px 8px rgba(0,0,0,0.2)',
+              }
+            }}
           >
-            Send
+            <SendIcon />
           </Button>
         </Stack>
       </form>

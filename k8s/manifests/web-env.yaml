@@ -1,0 +1,8 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: web-env
+  namespace: nochat
+data:
+  .env: |
+    REACT_APP_SIGNALING_SERVICE_URL=ws://nochat-signaling.nochat.svc.cluster.local:8080

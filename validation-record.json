@@ -1,0 +1,17 @@
+{
+  "Changes": [
+    {
+      "Action": "CREATE",
+      "ResourceRecordSet": {
+        "Name": "_1e467b482e0555f900db5455aa6622cd.nochat.io",
+        "Type": "CNAME",
+        "TTL": 300,
+        "ResourceRecords": [
+          {
+            "Value": "_b52ebd2cccaa4733e1342749f11d358a.zfyfvmchrl.acm-validations.aws"
+          }
+        ]
+      }
+    }
+  ]
+}
