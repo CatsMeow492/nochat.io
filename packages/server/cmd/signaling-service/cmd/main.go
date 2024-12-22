@@ -7,7 +7,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -25,7 +24,7 @@ var upgrader = websocket.Upgrader{
 }
 
 var (
-	maxMessageSize = 128 * 1024
+	maxMessageSize = 1024 * 1024
 	writeWait      = 10 * time.Second
 	pongWait       = 60 * time.Second
 	pingPeriod     = (pongWait * 9) / 10
@@ -40,23 +39,13 @@ func init() {
 }
 
 func handleConnection(w http.ResponseWriter, r *http.Request) {
-	log.Printf("Received connection request from %s", r.RemoteAddr)
-
-	// Upgrade connection to WebSocket
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Println("Error during connection upgrade:", err)
 		return
 	}
 
-	if conn == nil {
-		log.Println("WebSocket connection is nil, cannot proceed")
-		return
-	}
-
 	roomID := r.URL.Query().Get("room_id")
-	log.Printf("Getting or creating room for %s", roomID)
-
 	room, err := roomManager.GetOrCreateRoom(roomID)
 	if err != nil {
 		log.Printf("Error getting or creating room: %v", err)
@@ -64,13 +53,14 @@ func handleConnection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if room == nil {
-		log.Printf("Room is nil for room ID: %s", roomID)
-		conn.Close()
-		return
+	providedUserID := r.URL.Query().Get("user_id")
+	var clientUUID string
+	if providedUserID != "" {
+		clientUUID = providedUserID
+	} else {
+		clientUUID = models.GenerateUniqueID()
 	}
 
-	clientUUID := models.GenerateUniqueID()
 	client := room.AddClient(conn, clientUUID)
 	if client == nil {
 		log.Printf("Client could not be added to room: %s", roomID)
@@ -78,84 +68,34 @@ func handleConnection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("Added client %s to room %s", clientUUID, roomID)
-
-	// Queue the user ID message
-	userIDMessage := models.Message{
-		Type:    "userID",
-		RoomID:  roomID,
-		Content: clientUUID,
-	}
-	userIDMessageBytes, err := json.Marshal(userIDMessage)
-	if err != nil {
-		log.Printf("Error marshaling user ID message: %v", err)
-	} else {
-		client.Send <- userIDMessageBytes
-	}
-
-	room.Mu.Lock()
-	isInitiator := room.Initiator == nil
-	if isInitiator {
-		room.Initiator = client
-	}
-	sendMessage(client, "initiatorStatus", isInitiator)
-	room.Mu.Unlock()
-
-	// Set up read and write pumps
-	var wg sync.WaitGroup
-	wg.Add(2)
-
 	go func() {
-		defer wg.Done()
-		readPump(client, room)
+		client.Send <- models.MarshalMessage("userID", roomID, clientUUID)
+
+		isInitiator := room.Initiator == client
+		client.Send <- models.MarshalMessage("initiatorStatus", roomID, isInitiator)
+
+		messageHandler.SendInitialRoomState(client, room)
+		messageHandler.BroadcastUserCount(room)
+		messageHandler.BroadcastUserList(room)
 	}()
 
-	go func() {
-		defer wg.Done()
-		writePump(client)
-	}()
+	go readPump(client, room)
+	go writePump(client)
 
-	wg.Wait()
+	<-client.Done
 
 	room.RemoveClient(client)
-	// broadcastUserCount(room)
-}
-
-func checkRoomReadiness(room *models.Room, messageHandler *handlers.MessageHandler) {
-	for {
-		time.Sleep(10 * time.Second)
-
-		log.Printf("Checking room readiness for room %s", room.ID)
-		room.Mu.RLock()
-		meetingStarted := room.MeetingStarted
-		allReady := room.AllClientsReady()
-		allReadyMessageSent := room.AllReadyMessageSent
-		room.Mu.RUnlock()
-
-		log.Printf("Meeting started: %t, All clients ready: %t", meetingStarted, allReady)
-
-		if meetingStarted && allReady && !allReadyMessageSent {
-			log.Printf("Meeting started and all clients are ready in room %s. Sending allReady message.", room.ID)
-			messageHandler.SendAllReadyMessage(room)
-
-			// Wait for a short duration to ensure the allReady message is sent
-			time.Sleep(500 * time.Millisecond)
-
-			log.Printf("Sending createOffer message for room %s.", room.ID)
-			messageHandler.SendCreateOfferToInitiator(room)
-			return
-		}
-
-		if !meetingStarted {
-			log.Printf("Waiting for meeting to start in room %s", room.ID)
-		}
-	}
+	messageHandler.BroadcastUserCount(room)
+	messageHandler.BroadcastUserList(room)
 }
 
 func readPump(client *models.Client, room *models.Room) {
 	log.Printf("Starting read pump for client %s in room %s", client.UserID, client.Room.ID)
 	defer func() {
 		client.Conn.Close()
+		room.RemoveClient(client)
+		messageHandler.BroadcastUserCount(room)
+		messageHandler.BroadcastUserList(room)
 		log.Printf("Read pump stopped for client %s in room %s", client.UserID, client.Room.ID)
 	}()
 
@@ -170,11 +110,12 @@ func readPump(client *models.Client, room *models.Room) {
 	for {
 		_, message, err := client.Conn.ReadMessage()
 		if err != nil {
-			// ...existing error handling code...
+			messageHandler.BroadcastUserCount(room)
 			break
 		}
 		var parsedMessage models.Message
-		log.Printf("Received message: %s", string(message))
+		// only log the first 25 characters of the message
+		log.Printf("Received message type: %s", getMessageType(message))
 		if err := json.Unmarshal(message, &parsedMessage); err != nil {
 			log.Printf("Error parsing message: %v", err)
 			continue
@@ -183,13 +124,31 @@ func readPump(client *models.Client, room *models.Room) {
 		case "ready":
 			log.Printf("Client %s is ready in room %s", client.UserID, room.ID)
 			room.SetClientReady(client, true)
-			go checkRoomReadiness(room, messageHandler)
+			messageHandler.BroadcastUserCount(room)
+			messageHandler.BroadcastUserList(room)
 		case "offer":
 			log.Printf("Handling message type: %s, sending to message handler", parsedMessage.Type)
 			messageHandler.HandleMessage(parsedMessage, client, room)
 		case "answer":
-			log.Printf("Handling message type: %s, sending to message handler", parsedMessage.Type)
-			messageHandler.HandleMessage(parsedMessage, client, room)
+			log.Printf("[answer:new] from:%s", client.UserID)
+			if content, ok := parsedMessage.Content.(map[string]interface{}); ok && content != nil {
+				targetPeerID, ok1 := content["targetPeerID"].(string)
+				fromPeerID, ok2 := content["fromPeerID"].(string)
+				sdp, ok3 := content["sdp"].(map[string]interface{})
+
+				log.Printf("Answer validation: targetPeerID=%v, fromPeerID=%v, hasSDP=%v", ok1, ok2, ok3)
+				log.Printf("Answer received with SDP from %s to %s", fromPeerID, targetPeerID)
+
+				if !ok1 || !ok2 || !ok3 || targetPeerID == "" || fromPeerID == "" || sdp == nil {
+					log.Printf("Invalid answer message content: %+v")
+					continue
+				}
+
+				log.Printf("Forwarding answer from %s to %s", fromPeerID, targetPeerID)
+				messageHandler.HandleMessage(parsedMessage, client, room)
+			} else {
+				log.Printf("Invalid answer message type: expected map[string]interface{}, got %T", parsedMessage.Content)
+			}
 		case "iceCandidate":
 			log.Printf("Handling message type: %s, sending to message handler", parsedMessage.Type)
 			messageHandler.HandleMessage(parsedMessage, client, room)
@@ -197,8 +156,20 @@ func readPump(client *models.Client, room *models.Room) {
 			log.Printf("Handling message type: %s, sending to message handler", parsedMessage.Type)
 			messageHandler.HandleMessage(parsedMessage, client, room)
 		case "startMeeting":
-			log.Printf("Handling message type: %s, sending to message handler", parsedMessage.Type)
-			messageHandler.HandleMessage(parsedMessage, client, room)
+			log.Printf("Broadcasting start meeting message to room %s", room.ID)
+			messageHandler.BroadcastToRoom(room, models.MarshalMessage("startMeeting", room.ID, true))
+
+			// Use GetTargetPeerIDs to maintain directional connections
+			sortedClients := room.GetSortedClients()
+			for _, client := range sortedClients {
+				peers := room.GetTargetPeerIDs(client.UserID)
+				if len(peers) > 0 {
+					createOfferMsg := models.MarshalMessage("createOffer", room.ID, map[string]interface{}{
+						"peers": peers,
+					})
+					client.Send <- createOfferMsg
+				}
+			}
 		}
 
 	}
@@ -206,30 +177,17 @@ func readPump(client *models.Client, room *models.Room) {
 
 func writePump(client *models.Client) {
 	ticker := time.NewTicker(pingPeriod)
-	defer func() {
-		ticker.Stop()
-		client.Conn.Close()
-		log.Printf("[WritePump] Stopped for client %s", client.UserID)
-	}()
-
-	log.Printf("[WritePump] Started for client %s", client.UserID)
+	defer ticker.Stop()
 
 	for {
 		select {
 		case message, ok := <-client.Send:
 			if !ok {
-				log.Printf("[WritePump] Send channel closed for client %s", client.UserID)
-				client.Conn.WriteMessage(websocket.CloseMessage, []byte{})
 				return
 			}
-
-			log.Printf("[WritePump] Received message for client %s: %s", client.UserID, string(message))
-
-			if err := client.Conn.WriteMessage(websocket.TextMessage, message); err != nil {
-				log.Printf("[WritePump] Error writing to client %s: %v", client.UserID, err)
-				return
-			}
-			log.Printf("[WritePump] Successfully wrote to client %s", client.UserID)
+			client.Conn.WriteMessage(websocket.TextMessage, message)
+		case <-ticker.C:
+			client.Conn.WriteMessage(websocket.PingMessage, nil)
 		}
 	}
 }
@@ -320,39 +278,15 @@ func cleanupRooms() {
 	defer ticker.Stop()
 
 	for range ticker.C {
-		log.Printf("Starting room cleanup check...")
 		rooms := roomManager.GetAllRooms()
 		now := time.Now()
 
-		if len(rooms) == 0 {
-			log.Printf("No rooms to cleanup")
-			continue
-		}
-
 		for _, room := range rooms {
-			room.Mu.RLock()
 			isEmpty := len(room.Clients) == 0
 			isInactive := now.Sub(room.LastActivity) > roomInactiveThreshold
-			lastActivity := room.LastActivity
-			room.Mu.RUnlock()
 
-			log.Printf("Room %s status - Empty: %v, Inactive: %v, Last Activity: %v",
-				room.ID,
-				isEmpty,
-				isInactive,
-				lastActivity)
-
-			if isEmpty && isInactive {
-				log.Printf("Cleaning up inactive room: %s (Last activity: %v, Inactive for: %v)",
-					room.ID,
-					lastActivity,
-					now.Sub(lastActivity))
-
-				if err := roomManager.RemoveRoom(room.ID); err != nil {
-					log.Printf("Error removing room %s: %v", room.ID, err)
-				} else {
-					log.Printf("Successfully removed room %s", room.ID)
-				}
+			if isEmpty || isInactive {
+				roomManager.RemoveRoom(room.ID)
 			}
 		}
 	}
@@ -397,16 +331,32 @@ func main() {
 		log.Fatalf("Error connecting to Redis: %v", err)
 	}
 
-	// Initialize the RoomManager with the Redis client
 	roomManager = models.GetRoomManager()
 	roomManager.SetRedisClient(rdb)
 
+	// Add CORS middleware
+	corsMiddleware := func(next http.HandlerFunc) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Access-Control-Allow-Origin", "*")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+
+			if r.Method == "OPTIONS" {
+				w.WriteHeader(http.StatusOK)
+				return
+			}
+
+			next(w, r)
+		}
+	}
+
 	http.HandleFunc("/health", health)
 	http.HandleFunc("/ws", handleConnection)
-	http.HandleFunc("/initiator", getInitiatorStatus)
-	http.HandleFunc("/handshake", getHandshakeStages)
-	http.HandleFunc("/roomStatus", getRoomStatus)
-	http.HandleFunc("/debug", getDebugInfo)
+	http.HandleFunc("/userList", corsMiddleware(getUserList))
+	http.HandleFunc("/initiator", corsMiddleware(getInitiatorStatus))
+	http.HandleFunc("/handshake", corsMiddleware(getHandshakeStages))
+	http.HandleFunc("/roomStatus", corsMiddleware(getRoomStatus))
+	http.HandleFunc("/debug", corsMiddleware(getDebugInfo))
 
 	go cleanupRooms()
 
@@ -426,4 +376,40 @@ func sendMessage(client *models.Client, messageType string, content interface{})
 		return
 	}
 	client.Send <- messageBytes
+}
+
+func getUserList(w http.ResponseWriter, r *http.Request) {
+	roomID := r.URL.Query().Get("room_id")
+	room, err := roomManager.GetRoom(roomID)
+	if err != nil {
+		http.Error(w, "Room not found", http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(room.GetUserList())
+}
+
+func truncateMessage(msg string, length int) string {
+	if len(msg) > length {
+		return msg[:length] + "..."
+	}
+	return msg
+}
+
+func truncateSDP(sdp map[string]interface{}) string {
+	if sdpContent, ok := sdp["sdp"].(map[string]interface{}); ok {
+		return fmt.Sprintf("[SDP content with %d parameters]", len(sdpContent))
+	}
+	return "[SDP content]"
+}
+
+func getMessageType(message []byte) string {
+	var msg struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(message, &msg); err != nil {
+		return "unknown"
+	}
+	return msg.Type
 }

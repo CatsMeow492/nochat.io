@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"time"
+	"strings"
 
 	"gitlab.com/secp/services/backend/cmd/signaling-service/internal/models"
 )
@@ -18,32 +18,30 @@ func NewMessageHandler(roomManager *models.RoomManager) *MessageHandler {
 }
 
 func (h *MessageHandler) HandleMessage(msg models.Message, client *models.Client, room *models.Room) {
-	room.UpdateActivity()
-
-	log.Printf("Handling message of type: %s for room: %s", msg.Type, msg.RoomID)
+	log.Printf("[%s:%s] from:%s", msg.Type, room.ID, client.UserID)
 
 	switch msg.Type {
-	case "ready":
-		h.handleReady(msg, client, room)
+	case "startMeeting":
+		h.handleStartMeeting(msg, client, room)
 	case "offer":
 		h.handleOffer(msg, client, room)
 	case "answer":
+		content, ok := msg.Content.(map[string]interface{})
+		if !ok {
+			log.Printf("Error: answer content is not a map")
+			return
+		}
+		targetPeerID, ok := content["targetPeerID"].(string)
+		if !ok {
+			log.Printf("Error: targetPeerID not found in answer")
+			return
+		}
+		log.Printf("[ANSWER] Received answer message from client %s to %s: %+v", client.UserID, targetPeerID, msg)
 		h.handleAnswer(msg, client, room)
 	case "iceCandidate":
 		h.handleICECandidate(msg, client, room)
-	case "ping":
-		h.handlePing(msg, client, room)
-	case "pong":
-		h.handlePong(msg, client, room)
-	case "initiatorStatus":
-		h.handleInitiatorStatus(msg, client, room)
-	case "requestInitialState":
-		h.handleRequestInitialState(msg, client, room)
 	case "chatMessage":
 		h.handleChatMessage(msg, client, room)
-	case "startMeeting":
-		log.Printf("Handling startMeeting message from client %s", client.UserID)
-		h.handleStartMeeting(msg, client, room)
 	default:
 		h.handleUnknownMessage(msg, client, room)
 	}
@@ -70,30 +68,190 @@ func (h *MessageHandler) handleReady(msg models.Message, client *models.Client, 
 	isReady := readyData.Status == "ready"
 	room.SetClientReady(client, isReady)
 
-	// if room.AllClientsReady() && room.GetTotalClientsCount() >= 2 {
-	// 	h.sendAllReadyMessage(room)
-	// 	h.sendCreateOfferToInitiator(room)
-	// }
 }
 
 func (h *MessageHandler) handleOffer(msg models.Message, client *models.Client, room *models.Room) {
-	log.Printf("Received offer from client %s in room: %s", client.UserID, room.ID)
-	room.State = "offer"
-	log.Printf("Broadcasting offer to room: %s", msg.RoomID)
-	broadcastToRoom(room, "offer", toString(msg.Content), client)
+	content, ok := msg.Content.(map[string]interface{})
+	if !ok {
+		log.Printf("Error: offer content is not a map")
+		return
+	}
+
+	// Check both possible property names
+	var targetPeerID string
+	if id, ok := content["targetPeerID"].(string); ok {
+		targetPeerID = id
+	} else if id, ok := content["targetPeerId"].(string); ok {
+		targetPeerID = id
+	} else if id, ok := content["targetPeer"].(string); ok {
+		targetPeerID = id
+	} else {
+		log.Printf("Error: targetPeerID/targetPeerId not found in offer. Available keys: %v", getKeys(content))
+		return
+	}
+
+	// Validate SDP exists and log concise info
+	if sdp, ok := content["sdp"].(map[string]interface{}); ok {
+		if sdpStr, ok := sdp["sdp"].(string); ok {
+			log.Printf("[OFFER] SDP validation: %s", truncateSDP(sdpStr))
+		}
+	}
+
+	content["fromPeerID"] = client.UserID
+
+	// Store the offer state before forwarding
+	room.StoreSignalingState(targetPeerID, client.UserID, "offer", content)
+
+	// Check for any queued answers
+	queuedAnswers := room.GetAndClearQueuedAnswers(targetPeerID, client.UserID)
+
+	// Forward the offer
+	targetPeer, exists := room.Clients[targetPeerID]
+	if !exists {
+		log.Printf("Target peer %s not found in room", targetPeerID)
+		return
+	}
+
+	offerMsg := models.Message{
+		Type:    "offer",
+		RoomID:  room.ID,
+		Content: content,
+	}
+
+	messageBytes, err := json.Marshal(offerMsg)
+	if err != nil {
+		log.Printf("Error marshaling offer message: %v", err)
+		return
+	}
+
+	log.Printf("[OFFER] from:%s to:%s room:%s", client.UserID[:8], targetPeerID[:8], room.ID)
+	targetPeer.Send <- messageBytes
+
+	if len(queuedAnswers) > 0 {
+		log.Printf("[OFFER] Processing %d queued answers for peer %s", len(queuedAnswers), targetPeerID[:8])
+		for _, answer := range queuedAnswers {
+			answerMsg := models.Message{
+				Type:    "answer",
+				RoomID:  room.ID,
+				Content: answer,
+			}
+			if answerBytes, err := json.Marshal(answerMsg); err == nil {
+				client.Send <- answerBytes
+			}
+		}
+	}
 }
 
 func (h *MessageHandler) handleAnswer(msg models.Message, client *models.Client, room *models.Room) {
-	log.Printf("Received answer from client %s in room: %s", client.UserID, room.ID)
-	room.State = "answer"
-	log.Printf("Broadcasting answer to room: %s", msg.RoomID)
-	broadcastToRoom(room, "answer", toString(msg.Content), client)
+	content, ok := msg.Content.(map[string]interface{})
+	if !ok {
+		log.Printf("Error: answer content is not a map")
+		return
+	}
+
+	// Log only essential information, not the SDP
+	log.Printf("[ANSWER] Processing answer from client %s", client.UserID[:8])
+
+	// Check for target peer ID in various formats
+	var targetPeerID string
+	if id, ok := content["targetPeerId"].(string); ok {
+		targetPeerID = id
+	} else if id, ok := content["targetPeerID"].(string); ok {
+		targetPeerID = id
+	} else if id, ok := content["targetPeer"].(string); ok {
+		targetPeerID = id
+	}
+
+	if targetPeerID == "" {
+		// Try to find the peer from signaling state
+		states := room.GetSignalingStates(client.UserID)
+		if len(states) > 0 {
+			// Use the most recent offer's peer ID
+			targetPeerID = states[len(states)-1].PeerID
+			log.Printf("[ANSWER] Retrieved target peer %s from signaling state", targetPeerID)
+		} else {
+			log.Printf("[ANSWER] No target peer ID found in answer or signaling state")
+			return
+		}
+	}
+
+	// Don't queue answers to self
+	if targetPeerID == client.UserID {
+		log.Printf("[ANSWER] Ignoring self-targeted from %s", client.UserID[:8])
+		return
+	}
+
+	// Add fromPeerId to content
+	content["fromPeerId"] = client.UserID
+
+	targetPeer, exists := room.Clients[targetPeerID]
+	if !exists {
+		log.Printf("[ANSWER] Target peer %s not found in room", targetPeerID[:8])
+		return
+	}
+
+	answerMsg := models.Message{
+		Type:    "answer",
+		RoomID:  room.ID,
+		Content: content,
+	}
+
+	messageBytes, err := json.Marshal(answerMsg)
+	if err != nil {
+		log.Printf("Error marshaling answer message: %v", err)
+		return
+	}
+
+	log.Printf("[ANSWER] from:%s to:%s room:%s", client.UserID[:8], targetPeerID[:8], room.ID)
+	targetPeer.Send <- messageBytes
 }
 
 func (h *MessageHandler) handleICECandidate(msg models.Message, client *models.Client, room *models.Room) {
-	log.Printf("Received ICE candidate from client %s in room: %s", client.UserID, room.ID)
-	log.Printf("Broadcasting ICE candidate to room: %s", msg.RoomID)
-	broadcastToRoom(room, "iceCandidate", toString(msg.Content), client)
+	content, ok := msg.Content.(map[string]interface{})
+	if !ok {
+		log.Printf("[ICE] Invalid content")
+		return
+	}
+
+	// Check for target peer ID in various formats
+	var targetPeerID string
+	if id, ok := content["targetPeerId"].(string); ok {
+		targetPeerID = id
+	} else if id, ok := content["targetPeerID"].(string); ok {
+		targetPeerID = id
+	} else if id, ok := content["targetPeer"].(string); ok {
+		targetPeerID = id
+	}
+
+	if targetPeerID == "" {
+		log.Printf("[ICE] Missing target. Available keys: %v", getKeys(content))
+		return
+	}
+
+	// Prevent self-targeting of ICE candidates
+	if targetPeerID == client.UserID {
+		log.Printf("[ICE] Skipping self-targeted candidate from %s", client.UserID[:8])
+		return
+	}
+
+	// Add fromPeerId to content
+	content["fromPeerId"] = client.UserID
+
+	log.Printf("[ICE] Content: from=%s, target=%s", client.UserID[:8], targetPeerID[:8])
+
+	iceMsg := models.Message{
+		Type:    "iceCandidate",
+		RoomID:  room.ID,
+		Content: content,
+	}
+
+	if targetPeer, exists := room.Clients[targetPeerID]; exists {
+		messageBytes, _ := json.Marshal(iceMsg)
+		targetPeer.Send <- messageBytes
+		log.Printf("[ICE] Forwarded from %s to %s", client.UserID[:8], targetPeerID[:8])
+	} else {
+		log.Printf("[ICE] Target peer not found: %s", targetPeerID[:8])
+	}
 }
 
 func (h *MessageHandler) handleInitiatorStatus(msg models.Message, client *models.Client, room *models.Room) {
@@ -146,69 +304,52 @@ func (h *MessageHandler) handleUnknownMessage(msg models.Message, client *models
 	client.Send <- []byte(fmt.Sprintf(`{"type":"error","roomID":"%s","content":"Unhandled message type: %s"}`, room.ID, msg.Type))
 }
 
-func (h *MessageHandler) handleStartMeeting(_ models.Message, client *models.Client, room *models.Room) {
-	// First block: things that need the write lock
-	room.Mu.Lock()
-	if room.Initiator != client {
-		room.Mu.Unlock()
-		log.Printf("Client %s is not the initiator and cannot start the meeting", client.UserID)
-		return
-	}
-
-	log.Printf("Setting MeetingStarted flag for room %s", room.ID)
+func (h *MessageHandler) handleStartMeeting(msg models.Message, client *models.Client, room *models.Room) {
+	// First, update room state
 	room.MeetingStarted = true
-	log.Printf("MeetingStarted flag is now: %t", room.MeetingStarted)
-	room.Mu.Unlock() // Release the lock before broadcasting
 
-	// Create and broadcast meetingStarted message
-	meetingStartedMsg := models.Message{
-		Type:    "meetingStarted",
+	// Broadcast meeting started to everyone
+	startMsg := models.Message{
+		Type:    "startMeeting",
 		RoomID:  room.ID,
-		Content: nil,
+		Content: true,
 	}
-	meetingStartedBytes, err := json.Marshal(meetingStartedMsg)
-	if err != nil {
-		log.Printf("Error marshaling meetingStarted message: %v", err)
-		return
-	}
+	messageBytes, _ := json.Marshal(startMsg)
+	room.Broadcast(messageBytes, nil)
 
-	log.Printf("Broadcasting meetingStarted message directly via room.Broadcast")
-	room.Broadcast(meetingStartedBytes, nil)
-	log.Printf("MeetingStarted broadcast complete")
+	// Get all clients sorted by their IDs
+	sortedClients := room.GetSortedClients()
 
-	// Send createOffer to initiator
-	createOfferMsg := models.Message{
-		Type:    "createOffer",
-		RoomID:  room.ID,
-		Content: "Please create an offer",
-	}
-	createOfferBytes, err := json.Marshal(createOfferMsg)
-	if err != nil {
-		log.Printf("Error marshaling createOffer message: %v", err)
-		return
-	}
+	// For each client, determine their target peers based on ID comparison
+	for _, client := range sortedClients {
+		// Only get peers with larger IDs to prevent duplicate connections
+		peers := room.GetTargetPeerIDs(client.UserID)
 
-	log.Printf("Sending createOffer message directly to initiator %s", client.UserID)
-	client.Send <- createOfferBytes
-	log.Printf("CreateOffer message sent to initiator")
+		if len(peers) > 0 {
+			createOfferMsg := models.Message{
+				Type:   "createOffer",
+				RoomID: room.ID,
+				Content: map[string]interface{}{
+					"peers": peers,
+				},
+			}
+			messageBytes, _ := json.Marshal(createOfferMsg)
+			client.Send <- messageBytes
+			log.Printf("Sent createOffer to client %s with peers: %v", client.UserID[:8], peers)
+		}
+	}
 }
 
 func (h *MessageHandler) SendAllReadyMessage(room *models.Room) {
-	log.Printf("Preparing to send allReady message to room %s", room.ID)
+	log.Println("All clients are ready, sending allReady message")
 	readyMessage := models.Message{
 		Type:    "allReady",
 		RoomID:  room.ID,
 		Content: "All clients are ready",
 	}
-	readyMessageBytes, err := json.Marshal(readyMessage)
-	if err != nil {
-		log.Printf("Error marshaling allReady message: %v", err)
-		return
-	}
-	log.Printf("Broadcasting allReady message: %s", string(readyMessageBytes))
+	readyMessageBytes, _ := json.Marshal(readyMessage)
 	room.Broadcast(readyMessageBytes, nil)
 	room.AllReadyMessageSent = true
-	log.Printf("AllReady message broadcast completed for room %s", room.ID)
 }
 
 func (h *MessageHandler) SendCreateOfferToInitiator(room *models.Room) {
@@ -250,7 +391,6 @@ func (h *MessageHandler) handlePing(msg models.Message, client *models.Client, r
 func (h *MessageHandler) handlePong(msg models.Message, client *models.Client, room *models.Room) {
 	log.Printf("Received pong message from client %s in room: %s", client.UserID, room.ID)
 
-	// Log the content of the pong message
 	contentJSON, err := json.Marshal(msg.Content)
 	if err != nil {
 		log.Printf("Error marshaling pong content: %v", err)
@@ -258,7 +398,6 @@ func (h *MessageHandler) handlePong(msg models.Message, client *models.Client, r
 		log.Printf("Pong content: %s", string(contentJSON))
 	}
 
-	// You can add additional logic here if needed, such as updating client status or room state
 }
 
 func broadcastToRoom(room *models.Room, messageType string, content interface{}, excludeClient *models.Client) {
@@ -273,12 +412,9 @@ func broadcastToRoom(room *models.Room, messageType string, content interface{},
 		return
 	}
 
-	log.Printf("Broadcasting %s message to room %s", messageType, room.ID)
 	room.Broadcast(broadcastMessage, excludeClient)
-	log.Printf("Broadcast of %s message completed", messageType)
 }
 
-// Helper function to convert interface{} to string
 func toString(v interface{}) string {
 	switch v := v.(type) {
 	case string:
@@ -295,34 +431,74 @@ func toString(v interface{}) string {
 	}
 }
 
-func (h *MessageHandler) checkRoomReadiness(room *models.Room) {
-	for {
-		time.Sleep(1 * time.Second)
-
-		room.Mu.RLock()
-		meetingStarted := room.MeetingStarted
-		allReady := room.AllClientsReady()
-		allAnswersReceived := room.AllAnswersReceived()
-		allReadyMessageSent := room.AllReadyMessageSent
-		room.Mu.RUnlock()
-
-		log.Printf("Room %s status - Meeting started: %t, All ready: %t, All answers: %t",
-			room.ID, meetingStarted, allReady, allAnswersReceived)
-
-		if meetingStarted && allReady && !allReadyMessageSent {
-			log.Printf("Meeting started and all clients are ready in room %s. Sending allReady message.", room.ID)
-			h.SendAllReadyMessage(room)
-
-			// Wait for a short duration to ensure the allReady message is sent
-			time.Sleep(500 * time.Millisecond)
-
-			log.Printf("Sending createOffer message for room %s.", room.ID)
-			h.SendCreateOfferToInitiator(room)
-			return
-		}
-
-		if !meetingStarted {
-			log.Printf("Waiting for meeting to start in room %s", room.ID)
-		}
+func (h *MessageHandler) BroadcastUserCount(room *models.Room) {
+	count := room.GetTotalClientsCount()
+	message := models.Message{
+		Type:    "userCount",
+		RoomID:  room.ID,
+		Content: fmt.Sprintf("%d", count),
 	}
+
+	messageBytes, err := json.Marshal(message)
+	if err != nil {
+		log.Printf("Error marshaling user count message: %v", err)
+		return
+	}
+
+	room.Broadcast(messageBytes, nil)
+	log.Printf("Broadcasted user count %d for room %s", count, room.ID)
+}
+
+func (h *MessageHandler) SendInitialRoomState(client *models.Client, room *models.Room) {
+	userCountMsg := models.Message{
+		Type:    "userCount",
+		RoomID:  room.ID,
+		Content: fmt.Sprintf("%d", room.GetTotalClientsCount()),
+	}
+
+	messageBytes, err := json.Marshal(userCountMsg)
+	if err != nil {
+		log.Printf("Error marshaling initial user count message: %v", err)
+		return
+	}
+
+	client.Send <- messageBytes
+}
+
+func (h *MessageHandler) BroadcastUserList(room *models.Room) {
+	users := room.GetUserList()
+	message := models.Message{
+		Type:   "userList",
+		RoomID: room.ID,
+		Content: map[string]interface{}{
+			"users": users,
+		},
+	}
+
+	messageBytes, err := json.Marshal(message)
+	if err != nil {
+		log.Printf("Error marshaling user list message: %v", err)
+		return
+	}
+
+	room.Broadcast(messageBytes, nil)
+	log.Printf("Broadcasted user list for room %s: %v", room.ID, users)
+}
+
+func (h *MessageHandler) BroadcastToRoom(room *models.Room, message []byte) {
+	room.Broadcast(message, nil)
+}
+
+func truncateSDP(sdp string) string {
+	lines := strings.Split(sdp, "\n")
+	return fmt.Sprintf("[SDP:%d lines]", len(lines))
+}
+
+// Helper function to get map keys
+func getKeys(m map[string]interface{}) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
 }

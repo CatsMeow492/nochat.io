@@ -1,0 +1,11 @@
+architecture: standalone
+auth:
+  enabled: true
+  password: "redis5666"
+master:
+  persistence:
+    enabled: true
+    storageClass: "ebs-sc"
+    size: 8Gi
+    annotations:
+      volume.beta.kubernetes.io/storage-class: "ebs-sc" 

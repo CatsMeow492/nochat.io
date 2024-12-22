@@ -1,7 +1,7 @@
 TAG?=0.0.1
-FRONTEND_SERVICE=secp-chat
-DOCKER_REPO=gcr.io/cloudsense-images-public/
-NAMESPACE=secp
+FRONTEND_SERVICE=nochat-web
+DOCKER_REPO=$(shell aws sts get-caller-identity --query Account --output text).dkr.ecr.us-east-1.amazonaws.com/
+NAMESPACE=nochat
 
 build-frontend:
 	docker build --platform=linux/amd64 -t $(FRONTEND_SERVICE):$(TAG) .
@@ -15,7 +15,4 @@ push-frontend:
 restart-frontend:
 	kubectl rollout restart deployment $(FRONTEND_SERVICE) -n $(NAMESPACE)
 
-restart-signaling:
-	kubectl rollout restart deployment $(SIGNALING_SERVICE) -n $(NAMESPACE)
-
-deploy-frontend: build-frontend tag-frontend push-frontend restart-frontend restart-signaling
+deploy-frontend: build-frontend tag-frontend push-frontend restart-frontend

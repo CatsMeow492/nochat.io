@@ -35,24 +35,18 @@ export const ChatComponent: React.FC<ChatComponentProps> = ({
 
   return (
     <Box sx={{ 
-      position: 'absolute', 
-      right: 20, 
-      bottom: 100, 
-      width: 300, 
-      bgcolor: 'rgba(0,0,0,0.8)',
-      borderRadius: 2,
-      p: 2,
       display: 'flex',
       flexDirection: 'column',
+      height: '100%',
       gap: 2
     }}>
       <Box sx={{ 
-        height: 300, 
+        flex: 1,
         overflowY: 'auto',
         display: 'flex',
         flexDirection: 'column',
         gap: 1,
-        px: 1
+        p: 2
       }}>
         {messages.map((msg, i) => (
           <Box key={i} sx={{ 
@@ -94,6 +88,7 @@ export const ChatComponent: React.FC<ChatComponentProps> = ({
             onChange={(e) => setNewMessage(e.target.value)}
             placeholder="Type a message..."
             sx={{ 
+              width: '100%',
               bgcolor: 'rgba(255,255,255,0.1)',
               '& .MuiInputBase-input': {
                 color: 'white',

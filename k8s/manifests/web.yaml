@@ -1,0 +1,40 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nochat-web
+  namespace: nochat
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nochat-web
+  template:
+    metadata:
+      labels:
+        app: nochat-web
+    spec:
+      containers:
+      - name: web
+        image: 500532294210.dkr.ecr.us-east-1.amazonaws.com/nochat-web:0.0.1
+        ports:
+        - containerPort: 80
+        volumeMounts:
+        - name: web-env
+          mountPath: /usr/share/nginx/html/.env
+          subPath: .env
+      volumes:
+      - name: web-env
+        configMap:
+          name: web-env
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nochat-web
+  namespace: nochat
+spec:
+  ports:
+  - port: 80
+    targetPort: 80
+  selector:
+    app: nochat-web 

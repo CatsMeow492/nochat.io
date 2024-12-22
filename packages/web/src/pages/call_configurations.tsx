@@ -203,7 +203,7 @@ const CallConfigurations: React.FC = () => {
             Ready to connect?
           </Typography>{" "}
           Select your audio and video devices, adjust your settings, and click
-          "Start Call" when you're all set. Ensure your mic and camera are
+          "Start or Join Call" when you're all set. Ensure your microphone and camera are
           working for the best experience.
         </Typography>
         <Box

@@ -1,13 +1,12 @@
 package models
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"log"
 	"runtime/debug"
-	"runtime/pprof"
+	"sort"
 	"sync"
 	"time"
 
@@ -52,61 +51,52 @@ type Client struct {
 	Done   chan struct{}
 }
 
+type SignalingState struct {
+	OfferTimestamp int64
+	PeerID         string
+	FromID         string
+	Type           string
+	Content        map[string]interface{}
+	Timestamp      time.Time
+}
+
 type Room struct {
-	ID                   string           `json:"id"`
-	Name                 string           `json:"name"`
-	CreatedBy            string           `json:"created_by"`
-	Clients              map[*Client]bool `json:"-"`
-	Mu                   sync.RWMutex     `json:"-"`
-	Initiator            *Client          `json:"-"`
-	State                string           `json:"state"`
-	OfferCreated         bool             `json:"offer_created"`
-	AllReadyMessageSent  bool             `json:"all_ready_message_sent"`
-	LastBroadcastTime    time.Time        `json:"last_broadcast_time"`
-	LastBroadcastedCount int              `json:"last_broadcasted_count"`
-	clientReady          map[*Client]bool `json:"-"`
-	LastActivity         time.Time        `json:"last_activity"`
-	IsActive             bool             `json:"is_active"`
-	MeetingStarted       bool             `json:"meeting_started"`
-	AnswersReceived      map[string]bool  `json:"-"`
+	ID                   string                                `json:"id"`
+	Name                 string                                `json:"name"`
+	CreatedBy            string                                `json:"created_by"`
+	Clients              map[string]*Client                    `json:"-"`
+	Mu                   sync.RWMutex                          `json:"-"`
+	Initiator            *Client                               `json:"-"`
+	State                string                                `json:"state"`
+	OfferCreated         bool                                  `json:"offer_created"`
+	AllReadyMessageSent  bool                                  `json:"all_ready_message_sent"`
+	LastBroadcastTime    time.Time                             `json:"last_broadcast_time"`
+	LastBroadcastedCount int                                   `json:"last_broadcasted_count"`
+	LastActivity         time.Time                             `json:"last_activity"`
+	IsActive             bool                                  `json:"is_active"`
+	MeetingStarted       bool                                  `json:"meeting_started"`
+	signalingStates      map[string]map[string]*SignalingState // targetPeerID -> fromPeerID -> state
+	queuedAnswers        map[string]map[string][]map[string]interface{}
+	activeConnections    map[string]map[string]bool // fromID -> targetID -> active
 }
 
 func NewRoom(id, name, createdBy string) *Room {
 	return &Room{
-		ID:              id,
-		Name:            name,
-		CreatedBy:       createdBy,
-		Clients:         make(map[*Client]bool),
-		clientReady:     make(map[*Client]bool),
-		Mu:              sync.RWMutex{},
-		LastActivity:    time.Now(),
-		IsActive:        true,
-		AnswersReceived: make(map[string]bool),
+		ID:                id,
+		Name:              name,
+		CreatedBy:         createdBy,
+		Clients:           make(map[string]*Client),
+		Mu:                sync.RWMutex{},
+		LastActivity:      time.Now(),
+		IsActive:          true,
+		signalingStates:   make(map[string]map[string]*SignalingState),
+		queuedAnswers:     make(map[string]map[string][]map[string]interface{}),
+		activeConnections: make(map[string]map[string]bool),
 	}
 }
 
 func GenerateUniqueID() string {
 	return uuid.New().String()
-}
-
-func dumpGoroutinesWithTimeout(timeout time.Duration) {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-
-	done := make(chan bool)
-	go func() {
-		var buf bytes.Buffer
-		pprof.Lookup("goroutine").WriteTo(&buf, 1)
-		log.Printf("Goroutine dump:\n%s", buf.String())
-		done <- true
-	}()
-
-	select {
-	case <-ctx.Done():
-		log.Println("Goroutine dump timed out")
-	case <-done:
-		log.Println("Goroutine dump completed")
-	}
 }
 
 func checkForDeadlock() {
@@ -124,67 +114,69 @@ func (r *Room) Save(ctx context.Context, rdb *redis.Client) error {
 }
 
 func (r *Room) AddClient(conn *websocket.Conn, userID string) *Client {
-	lockAcquired := make(chan bool, 1)
+	r.Mu.Lock()
+	defer r.Mu.Unlock()
 
-	go func() {
-		r.Mu.Lock()
-		lockAcquired <- true
-	}()
-
-	select {
-	case <-lockAcquired:
-
-		defer r.Mu.Unlock()
-		log.Printf("Locked room %s to add client %s", r.ID, userID)
-
-		client := &Client{
-			Conn:   conn,
-			UserID: userID,
-			Room:   r,
-			Send:   make(chan []byte, 1024),
-		}
-
-		r.Clients[client] = true
-		r.clientReady[client] = false
-		log.Printf("Client %s added to room %s", userID, r.ID)
-		return client
-
-	case <-time.After(5 * time.Second):
-		log.Printf("Lock acquisition timed out for room %s while adding client %s", r.ID, userID)
-		return nil
+	client := &Client{
+		UserID: userID,
+		Conn:   conn,
+		Send:   make(chan []byte, 256),
+		Room:   r,
+		Done:   make(chan struct{}),
 	}
+
+	r.Clients[userID] = client
+	log.Printf("Added client %s to room %s. Total clients: %d", userID, r.ID, len(r.Clients))
+
+	if r.Initiator == nil {
+		r.Initiator = client
+		log.Printf("Set client %s as initiator for room %s", userID, r.ID)
+	}
+
+	return client
 }
 
 func (r *Room) RemoveClient(client *Client) {
 	r.Mu.Lock()
-	defer r.Mu.Unlock()
+	wasInitiator := r.Initiator == client
+	delete(r.Clients, client.UserID)
 
-	if _, ok := r.Clients[client]; ok {
-		delete(r.Clients, client)
-		delete(r.clientReady, client)
-		close(client.Send)
-		log.Printf("Closed Send channel for client %s", client.UserID)
-
-		if r.Initiator == client {
-			log.Printf("Initiator removed from room %s, reassigning initiator", r.ID)
-			r.reassignInitiator()
+	if wasInitiator && len(r.Clients) > 0 {
+		for _, c := range r.Clients {
+			r.Initiator = c
+			go func(newInitiator *Client) {
+				initiatorMsg := Message{
+					Type:    "initiatorStatus",
+					RoomID:  r.ID,
+					Content: true,
+				}
+				msgBytes, _ := json.Marshal(initiatorMsg)
+				newInitiator.Send <- msgBytes
+			}(r.Initiator)
+			break
 		}
+	} else if len(r.Clients) == 0 {
+		r.Initiator = nil
 	}
+	r.Mu.Unlock()
+
+	close(client.Send)
 	log.Printf("Removed client %s from room %s", client.UserID, r.ID)
 }
 
 func (r *Room) SetClientReady(client *Client, ready bool) {
 	r.Mu.Lock()
 	defer r.Mu.Unlock()
-	r.clientReady[client] = ready
+	client.Ready = ready
+	log.Printf("Client %s ready state set to %v in room %s", client.UserID, ready, r.ID)
 }
 
 func (r *Room) AllClientsReady() bool {
 	r.Mu.RLock()
 	defer r.Mu.RUnlock()
 
-	for client, ready := range r.clientReady {
-		if !ready {
+	for _, client := range r.Clients {
+		if !client.Ready {
 			log.Printf("Client %s is not ready in room %s", client.UserID, r.ID)
 			return false
 		}
@@ -194,33 +186,18 @@ func (r *Room) AllClientsReady() bool {
 }
 
 func (r *Room) GetTotalClientsCount() int {
-	log.Printf("Attempting to acquire read lock for room %s", r.ID)
-
-	lockAcquired := make(chan bool, 1)
-	go func() {
-		r.Mu.RLock()
-		lockAcquired <- true
-	}()
-
-	select {
-	case <-lockAcquired:
-		defer r.Mu.RUnlock()
-		log.Printf("Read lock acquired for room %s, counting clients", r.ID)
-		clientCount := len(r.Clients)
-		log.Printf("Found %d clients in room %s", clientCount, r.ID)
-		return clientCount
-	case <-time.After(5 * time.Second):
-		log.Printf("Lock acquisition timed out for room %s, dumping goroutines", r.ID)
-		dumpGoroutinesWithTimeout(10 * time.Second)
-		return -1
-	}
+	r.Mu.RLock()
+	defer r.Mu.RUnlock()
+	count := len(r.Clients)
+	log.Printf("Getting total clients count for room %s: %d", r.ID, count)
+	return count
 }
 
 func (r *Room) GetReadyClientsCount() int {
 	r.Mu.RLock()
 	defer r.Mu.RUnlock()
 	readyCount := 0
-	for client := range r.Clients {
+	for _, client := range r.Clients {
 		if client.Ready {
 			readyCount++
 		}
@@ -229,44 +206,29 @@ func (r *Room) GetReadyClientsCount() int {
 }
 
 func (r *Room) Broadcast(message []byte, excludeClient *Client) {
-	log.Printf("DEBUG: Entered Broadcast method")
-	r.Mu.RLock()
-	log.Printf("[Broadcast] Starting broadcast to %d clients in room %s", len(r.Clients), r.ID)
-	log.Printf("[Broadcast] Message content: %s", string(message))
-
+	r.Mu.Lock()
 	clients := make([]*Client, 0, len(r.Clients))
-	for client := range r.Clients {
+	for _, client := range r.Clients {
 		if client != excludeClient {
 			clients = append(clients, client)
-			log.Printf("[Broadcast] Added client %s to broadcast list", client.UserID)
 		}
 	}
-	r.Mu.RUnlock()
-
-	log.Printf("[Broadcast] Found %d clients to broadcast to", len(clients))
+	r.Mu.Unlock()
 
 	for _, client := range clients {
-		log.Printf("[Broadcast] Sending to client %s", client.UserID)
-		if client.Send == nil {
-			log.Printf("[Broadcast] ERROR: Send channel is nil for client %s", client.UserID)
-			continue
-		}
-
 		select {
 		case client.Send <- message:
-			log.Printf("[Broadcast] Successfully queued message for client %s", client.UserID)
-		case <-time.After(time.Second):
-			log.Printf("[Broadcast] ERROR: Timeout sending to client %s", client.UserID)
+		default:
+			log.Printf("Warning: Unable to send message to client %s, channel full", client.UserID)
 		}
 	}
-	log.Printf("[Broadcast] Broadcast complete")
 }
 
 func (r *Room) GetUserIDs() []string {
 	r.Mu.RLock()
 	defer r.Mu.RUnlock()
 	userIDs := make([]string, 0, len(r.Clients))
-	for client := range r.Clients {
+	for _, client := range r.Clients {
 		userIDs = append(userIDs, client.UserID)
 	}
 	return userIDs
@@ -274,25 +236,17 @@ func (r *Room) GetUserIDs() []string {
 
 func (r *Room) reassignInitiator() {
 	if len(r.Clients) > 0 {
-
-		for client := range r.Clients {
+		for _, client := range r.Clients {
 			r.Initiator = client
-			log.Printf("New initiator assigned in room %s: %s", r.ID, client.UserID)
+			log.Printf("Reassigned initiator to client %s in room %s", client.UserID, r.ID)
 
 			initiatorMsg := Message{
 				Type:    "initiatorStatus",
 				RoomID:  r.ID,
-				Content: "true",
+				Content: true,
 			}
 			msgBytes, _ := json.Marshal(initiatorMsg)
-			select {
-			case client.Send <- msgBytes:
-				log.Printf("Notified new initiator %s in room %s", client.UserID, r.ID)
-			default:
-				log.Printf("Failed to notify new initiator %s, channel full", client.UserID)
-			}
-
-			r.broadcastNewInitiator(client)
+			client.Send <- msgBytes
 			return
 		}
 	} else {
@@ -303,14 +257,15 @@ func (r *Room) reassignInitiator() {
 
 func (r *Room) broadcastNewInitiator(newInitiator *Client) {
 	msg := Message{
-		Type:    "newInitiator",
-		RoomID:  r.ID,
+		Type:   "newInitiator",
+		RoomID: r.ID,
+
 		Content: newInitiator.UserID,
 	}
 	msgBytes, _ := json.Marshal(msg)
 	r.Mu.RLock()
 	defer r.Mu.RUnlock()
-	for client := range r.Clients {
+	for _, client := range r.Clients {
 		if client != newInitiator {
 			select {
 			case client.Send <- msgBytes:
@@ -450,22 +405,199 @@ func (rm *roomManagerImpl) RemoveRoom(roomID string) error {
 	return nil
 }
 
-func (r *Room) RecordAnswer(clientID string) {
-	r.Mu.Lock()
-	defer r.Mu.Unlock()
-	r.AnswersReceived[clientID] = true
+func MarshalMessage(messageType string, roomID string, content interface{}) []byte {
+	msg := Message{
+		Type:    messageType,
+		RoomID:  roomID,
+		Content: content,
+	}
+	msgBytes, _ := json.Marshal(msg)
+	return msgBytes
 }
 
-func (r *Room) AllAnswersReceived() bool {
+func (r *Room) GetUserList() []string {
 	r.Mu.RLock()
 	defer r.Mu.RUnlock()
 
-	expectedAnswers := len(r.Clients) - 1 // All clients except initiator
-	receivedAnswers := 0
-	for clientID := range r.AnswersReceived {
-		if clientID != r.Initiator.UserID {
-			receivedAnswers++
+	users := make([]string, 0, len(r.Clients))
+	for userID := range r.Clients {
+		users = append(users, userID)
+	}
+	log.Printf("Getting user list for room %s: %v", r.ID, users)
+	return users
+}
+
+func (r *Room) GetOtherClientIDs(clientID string) []string {
+	r.Mu.RLock()
+	defer r.Mu.RUnlock()
+
+	var otherIDs []string
+	for id := range r.Clients {
+		if id != clientID {
+			otherIDs = append(otherIDs, id)
 		}
 	}
-	return receivedAnswers >= expectedAnswers
+	return otherIDs
+}
+
+func (r *Room) GetTargetPeerIDs(clientID string) []string {
+	r.Mu.RLock()
+	defer r.Mu.RUnlock()
+
+	var targetPeers []string
+	for peerID := range r.Clients {
+		if peerID > clientID {
+			targetPeers = append(targetPeers, peerID)
+		}
+	}
+
+	if len(targetPeers) > 0 {
+		log.Printf("Client %s will create offers for peers: %v", clientID[:4], targetPeers)
+	}
+	return targetPeers
+}
+
+func (r *Room) StoreSignalingState(targetPeerID, fromPeerID string, messageType string, content map[string]interface{}) {
+	r.Mu.Lock()
+	defer r.Mu.Unlock()
+
+	if r.signalingStates[targetPeerID] == nil {
+		r.signalingStates[targetPeerID] = make(map[string]*SignalingState)
+	}
+	if r.signalingStates[fromPeerID] == nil {
+		r.signalingStates[fromPeerID] = make(map[string]*SignalingState)
+	}
+
+	state := &SignalingState{
+		OfferTimestamp: time.Now().UnixNano() / int64(time.Millisecond),
+		PeerID:         targetPeerID,
+		FromID:         fromPeerID,
+		Type:           messageType,
+		Content:        content,
+		Timestamp:      time.Now(),
+	}
+
+	r.signalingStates[targetPeerID][fromPeerID] = state
+	r.signalingStates[fromPeerID][targetPeerID] = state
+
+	log.Printf("Stored bidirectional signaling state for %s <-> %s: %s",
+		fromPeerID[:6], targetPeerID[:6], messageType)
+}
+
+func (r *Room) HasPendingOffer(targetPeerID, fromPeerID string) bool {
+	r.Mu.RLock()
+	defer r.Mu.RUnlock()
+
+	if states, ok := r.signalingStates[targetPeerID]; ok {
+		if state, ok := states[fromPeerID]; ok {
+			return state != nil
+		}
+	}
+	return false
+}
+
+func (r *Room) QueueAnswer(targetPeerID, fromPeerID string, content map[string]interface{}) {
+	r.Mu.Lock()
+	defer r.Mu.Unlock()
+
+	if r.queuedAnswers[targetPeerID] == nil {
+		r.queuedAnswers[targetPeerID] = make(map[string][]map[string]interface{})
+	}
+
+	r.queuedAnswers[targetPeerID][fromPeerID] = append(
+		r.queuedAnswers[targetPeerID][fromPeerID],
+		content,
+	)
+
+	log.Printf("Queued answer from %s for %s", fromPeerID, targetPeerID)
+}
+
+func (r *Room) GetAndClearQueuedAnswers(targetPeerID, fromPeerID string) []map[string]interface{} {
+	r.Mu.Lock()
+	defer r.Mu.Unlock()
+
+	if answers, ok := r.queuedAnswers[targetPeerID][fromPeerID]; ok {
+		delete(r.queuedAnswers[targetPeerID], fromPeerID)
+		if len(r.queuedAnswers[targetPeerID]) == 0 {
+			delete(r.queuedAnswers, targetPeerID)
+		}
+		return answers
+	}
+	return nil
+}
+
+func (r *Room) ClearSignalingState(targetPeerID, fromPeerID string) {
+	r.Mu.Lock()
+	defer r.Mu.Unlock()
+
+	if states, ok := r.signalingStates[targetPeerID]; ok {
+		delete(states, fromPeerID)
+		if len(states) == 0 {
+			delete(r.signalingStates, targetPeerID)
+		}
+	}
+
+	log.Printf("Cleared signaling state for %s -> %s", fromPeerID, targetPeerID)
+}
+
+func (r *Room) IsMeetingStarted() bool {
+	r.Mu.RLock()
+	defer r.Mu.RUnlock()
+	return r.MeetingStarted
+}
+
+func (r *Room) ValidateMessageRoute(fromID, targetID string) bool {
+	// Don't allow self-messaging
+	if fromID == targetID {
+		return false
+	}
+
+	// Verify both peers exist in the room
+	r.Mu.RLock()
+	defer r.Mu.RUnlock()
+
+	_, fromExists := r.Clients[fromID]
+	_, targetExists := r.Clients[targetID]
+
+	return fromExists && targetExists
+}
+
+func (r *Room) GetSortedClients() []*Client {
+	r.Mu.RLock()
+	defer r.Mu.RUnlock()
+
+	clients := make([]*Client, 0, len(r.Clients))
+	for _, client := range r.Clients {
+		clients = append(clients, client)
+	}
+
+	// Sort clients by UserID to ensure consistent ordering
+	sort.Slice(clients, func(i, j int) bool {
+		return clients[i].UserID < clients[j].UserID
+	})
+
+	return clients
+}
+
+func (r *Room) GetAllPeerIDs(excludeID string) []string {
+	var peerIDs []string
+	for clientID := range r.Clients {
+		if clientID != excludeID {
+			peerIDs = append(peerIDs, clientID)
+		}
+	}
+	return peerIDs
+}
+
+func (r *Room) GetSignalingStates(userID string) []*SignalingState {
+	r.Mu.RLock()
+	defer r.Mu.RUnlock()
+
+	var states []*SignalingState
+	for _, peerStates := range r.signalingStates {
+		if state, exists := peerStates[userID]; exists {
+			states = append(states, state)
+		}
+	}
+	return states
 }
