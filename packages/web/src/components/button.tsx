@@ -9,6 +9,7 @@ interface CallButtonProps {
   color?: string;
   active?: boolean;
   isUrgent?: boolean;
+  sx?: any;
 }
 
 const CallButton: React.FC<CallButtonProps> = ({
@@ -16,7 +17,8 @@ const CallButton: React.FC<CallButtonProps> = ({
   onClick,
   color = "inherit",
   active = true,
-  isUrgent = false
+  isUrgent = false,
+  sx = {}
 }) => {
   const theme = useTheme();
   
@@ -26,29 +28,31 @@ const CallButton: React.FC<CallButtonProps> = ({
       sx={{
         cursor: 'pointer',
         backgroundColor: isUrgent 
-          ? theme.palette.error.main 
-          : theme.palette.background.paper,
-        transition: 'all 0.3s ease',
+          ? 'rgba(239, 68, 68, 0.1)'
+          : 'rgba(255, 255, 255, 0.02)',
+        transition: 'all 0.2s ease',
         "&:hover": { 
           backgroundColor: isUrgent 
-            ? theme.palette.error.dark
-            : `${theme.palette.primary.main}20`,
-          transform: 'translateY(-2px)',
-          boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
-          "& .MuiSvgIcon-root": {
-            color: theme.palette.primary.main
-          }
+            ? 'rgba(239, 68, 68, 0.15)'
+            : 'rgba(255, 255, 255, 0.05)',
+          transform: 'translateY(-1px)',
+          boxShadow: '0 8px 32px rgba(0, 0, 0, 0.2)',
         },
         "&:active": {
           transform: 'translateY(0)',
-          boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
+          boxShadow: '0 4px 16px rgba(0, 0, 0, 0.1)',
         },
-        border: `1px solid ${active ? theme.palette.primary.main + '40' : 'rgba(255,255,255,0.1)'}`,
+        border: `1px solid ${active ? 'rgba(255, 255, 255, 0.1)' : 'rgba(255, 255, 255, 0.05)'}`,
         width: 48,
         height: 48,
-        color: active ? theme.palette.primary.main : theme.palette.text.secondary,
+        color: active 
+          ? isUrgent 
+            ? theme.palette.error.main
+            : '#6366f1'
+          : 'rgba(255, 255, 255, 0.5)',
         borderRadius: '12px',
-        boxShadow: active ? '0 2px 8px rgba(0,0,0,0.1)' : 'none',
+        backdropFilter: 'blur(12px)',
+        ...sx
       }}
     >
       <Icon 

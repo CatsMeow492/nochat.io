@@ -44,7 +44,7 @@ const Splash: React.FC = () => {
           top: 0,
           left: 0,
           right: 0,
-          bottom: 140,
+          bottom: 0,
           display: 'flex',
           justifyContent: 'center',
           alignItems: 'center',
@@ -54,75 +54,74 @@ const Splash: React.FC = () => {
       >
         <Box
           sx={{
-            backgroundColor: 'rgba(255, 255, 255, 0.1)',
-            borderRadius: '16px 16px 0 0',
-            padding: '10px 20px',
-            display: 'flex',
-            justifyContent: 'center',
-            alignItems: 'center',
-
-            gap: '20px',
-            width: '640px', // Takes full width of parent
-            //   height: "48px", // Fixed height for consistency
-          }}
-        >
-          <VideocamIcon sx={{ color: 'white', fontSize: 18 }} />
-          <ComputerIcon sx={{ color: 'white', fontSize: 18 }} />
-          <Mic sx={{ color: 'white', fontSize: 18 }} />
-        </Box>
-        <Box
-          sx={{
+            backgroundColor: 'rgba(255, 255, 255, 0.03)',
+            borderRadius: '24px',
+            padding: '48px',
+            width: '480px',
             display: 'flex',
             flexDirection: 'column',
             alignItems: 'center',
-            width: '600px',
+            textAlign: 'center',
+            backdropFilter: 'blur(12px)',
+            border: '1px solid rgba(255, 255, 255, 0.05)',
+            boxShadow: '0 8px 32px rgba(0, 0, 0, 0.2)',
           }}
         >
-          <Box
+          <Typography
+            variant="h1"
             sx={{
-              backgroundColor: 'rgba(0, 0, 0, 0.2)',
-              borderRadius: '0 0 16px 16px',
-              padding: '40px',
-              width: '100%',
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'center',
-              textAlign: 'center',
-              backdropFilter: 'blur(5px)',
-              border: '1px solid rgba(255, 255, 255, 0.1)',
-              boxShadow: '0 4px 30px rgba(0, 0, 0, 0.1)',
-              borderTop: 'none',
+              fontSize: '2.5rem',
+              fontWeight: 800,
+              background: `linear-gradient(45deg, #6366f1, #8b5cf6)`,
+              WebkitBackgroundClip: 'text',
+              WebkitTextFillColor: 'transparent',
+              mb: 2
             }}
           >
-            <Box component="img" src={Logo} alt="ULAP Digital Logo" />
-            <Typography
-              variant="body2"
-              sx={{
-                position: 'relative',
-                bottom: 40,
-                fontSize: 16,
-                color: '#ebebeb',
-                marginBottom: 0,
-                opacity: 0.7,
-              }}
-            >
-              For demonstration purposes only
-            </Typography>
-            <Button
-              onClick={handleGetStarted}
-              disableElevation
-              variant="text"
-              sx={{
-                textTransform: 'none',
-                mt: 4,
-                width: 250,
-                height: 60,
-                fontSize: '1rem',
-              }}
-            >
-              Get Started
-            </Button>
+            nochat.io
+          </Typography>
+          
+          <Typography
+            variant="body1"
+            sx={{
+              color: 'rgba(255, 255, 255, 0.7)',
+              mb: 4,
+              maxWidth: '320px'
+            }}
+          >
+            Zero-hassle, zero-traces video meetings—secure by design.
+          </Typography>
+
+          <Box
+            sx={{
+              display: 'flex',
+              gap: '16px',
+              mb: 4
+            }}
+          >
+            <VideocamIcon sx={{ color: 'rgba(255, 255, 255, 0.5)' }} />
+            <ComputerIcon sx={{ color: 'rgba(255, 255, 255, 0.5)' }} />
+            <Mic sx={{ color: 'rgba(255, 255, 255, 0.5)' }} />
           </Box>
+
+          <Button
+            onClick={handleGetStarted}
+            variant="contained"
+            sx={{
+              textTransform: 'none',
+              py: 2,
+              px: 6,
+              borderRadius: '12px',
+              fontSize: '1.1rem',
+              fontWeight: 600,
+              background: 'linear-gradient(45deg, #6366f1, #8b5cf6)',
+              '&:hover': {
+                background: 'linear-gradient(45deg, #4f46e5, #7c3aed)',
+              }
+            }}
+          >
+            Start a Call
+          </Button>
         </Box>
       </Box>
     </Box>

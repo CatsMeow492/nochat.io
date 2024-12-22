@@ -793,13 +793,16 @@ const CallView = () => {
       <Box
         sx={{
           position: 'absolute',
-          top: 10,
-          right: 10,
-          bgcolor: 'rgba(255,255,255,0.1)',
-          padding: 1,
+          top: 16,
+          right: 16,
+          bgcolor: 'rgba(255, 255, 255, 0.03)',
+          borderRadius: '12px',
+          padding: 2,
           display: 'flex',
           flexDirection: 'column',
           gap: 1,
+          border: '1px solid rgba(255, 255, 255, 0.05)',
+          backdropFilter: 'blur(12px)',
           zIndex: 1000
         }}
       >
@@ -847,7 +850,8 @@ const CallView = () => {
           display: 'flex',
           justifyContent: 'center',
           alignItems: 'center',
-          padding: 2,
+          padding: 3,
+          background: 'rgba(8, 8, 12, 0.95)',
         }}
       >
         <Box sx={{ width: '100%', height: '100%', position: 'relative' }}>
@@ -856,11 +860,10 @@ const CallView = () => {
             sx={{
               display: 'grid',
               gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))',
-              gap: 2,
+              gap: 3,
               width: '100%',
               height: '100%',
               padding: 2,
-              backgroundColor: 'background.default'
             }}
           >
             {Array.from(remoteStreams.entries())
@@ -869,12 +872,6 @@ const CallView = () => {
                 const hasVideoTracks = stream.getVideoTracks().length > 0;
                 const hasAudioTracks = stream.getAudioTracks().length > 0;
                 
-                console.log(`Rendering stream for peer ${peerId}:`, {
-                    hasVideo: hasVideoTracks,
-                    hasAudio: hasAudioTracks,
-                    isActive: activePeers.has(peerId)
-                });
-                
                 return (
                   <Box
                     key={`video-container-${peerId}`}
@@ -882,9 +879,11 @@ const CallView = () => {
                       position: 'relative',
                       width: '100%',
                       paddingTop: '75%',
-                      backgroundColor: 'background.paper',
-                      borderRadius: 1,
-                      overflow: 'hidden'
+                      background: 'rgba(255, 255, 255, 0.02)',
+                      border: '1px solid rgba(255, 255, 255, 0.05)',
+                      borderRadius: '16px',
+                      overflow: 'hidden',
+                      backdropFilter: 'blur(12px)',
                     }}
                   >
                     <Box
@@ -935,13 +934,16 @@ const CallView = () => {
             <Box
               sx={{
                 position: 'absolute',
-                bottom: 20,
-                right: 20,
-                width: '200px',
-                height: '150px',
-                borderRadius: '8px',
+                bottom: 24,
+                right: 24,
+                width: '240px',
+                height: '180px',
+                borderRadius: '12px',
                 overflow: 'hidden',
-                boxShadow: '0 4px 6px rgba(0, 0, 0, 0.1)',
+                border: '1px solid rgba(255, 255, 255, 0.05)',
+                background: 'rgba(255, 255, 255, 0.02)',
+                backdropFilter: 'blur(12px)',
+                boxShadow: '0 8px 32px rgba(0, 0, 0, 0.2)',
                 zIndex: 10
               }}
             >
@@ -965,33 +967,97 @@ const CallView = () => {
         </Box>
       </Box>
 
-      <Box sx={{ padding: 2 }}>
-        <Stack direction="row" justifyContent="center" spacing={2}>
-          <CallButton Icon={Mic} />
-          <CallButton Icon={Videocam} />
-          <CallButton Icon={CallEnd} color="error.main" onClick={() => navigate('/')} />
+      <Box 
+        sx={{ 
+          padding: 3,
+          background: 'rgba(8, 8, 12, 0.95)',
+          borderTop: '1px solid rgba(255, 255, 255, 0.05)',
+        }}
+      >
+        <Stack direction="row" justifyContent="center" spacing={3}>
+          <CallButton 
+            Icon={Mic} 
+            sx={{
+              background: 'rgba(255, 255, 255, 0.02)',
+              border: '1px solid rgba(255, 255, 255, 0.05)',
+              borderRadius: '12px',
+              padding: '12px',
+              '&:hover': {
+                background: 'rgba(255, 255, 255, 0.05)',
+              }
+            }}
+          />
+          <CallButton 
+            Icon={Videocam}
+            sx={{
+              background: 'rgba(255, 255, 255, 0.02)',
+              border: '1px solid rgba(255, 255, 255, 0.05)',
+              borderRadius: '12px',
+              padding: '12px',
+              '&:hover': {
+                background: 'rgba(255, 255, 255, 0.05)',
+              }
+            }}
+          />
+          <CallButton 
+            Icon={CallEnd} 
+            color="error.main" 
+            onClick={() => navigate('/')}
+            sx={{
+              background: 'rgba(255, 255, 255, 0.02)',
+              border: '1px solid rgba(255, 255, 255, 0.05)',
+              borderRadius: '12px',
+              padding: '12px',
+              '&:hover': {
+                background: 'rgba(239, 68, 68, 0.1)',
+              }
+            }}
+          />
         </Stack>
       </Box>
 
       {isInitiator ? (
         !meetingStarted && (
-          <Box sx={{ padding: 2, display: 'flex', justifyContent: 'center' }}>
+          <Box sx={{ 
+            padding: 3,
+            display: 'flex', 
+            justifyContent: 'center',
+            background: 'rgba(8, 8, 12, 0.95)',
+          }}>
             <Button
               variant="contained"
               onClick={startMeeting}
               sx={{
-                bgcolor: 'primary.main',
-                '&:hover': { bgcolor: 'primary.dark' },
+                py: 2,
+                px: 6,
+                borderRadius: '12px',
+                fontSize: '1.1rem',
+                fontWeight: 600,
+                textTransform: 'none',
+                background: 'linear-gradient(45deg, #6366f1, #8b5cf6)',
+                '&:hover': {
+                  background: 'linear-gradient(45deg, #4f46e5, #7c3aed)',
+                },
               }}
             >
-              Start Meeting
+              Start Call
             </Button>
           </Box>
         )
       ) : (
-        <Box sx={{ padding: 2, display: 'flex', justifyContent: 'center' }}>
-          <Typography variant="h6" sx={{ color: 'white' }}>
-            Waiting for Host
+        <Box sx={{ 
+          padding: 3,
+          display: 'flex', 
+          justifyContent: 'center',
+          background: 'rgba(8, 8, 12, 0.95)',
+        }}>
+          <Typography
+            sx={{
+              color: 'rgba(255, 255, 255, 0.7)',
+              fontSize: '1.1rem',
+            }}
+          >
+            Waiting for host to start the call...
           </Typography>
         </Box>
       )}

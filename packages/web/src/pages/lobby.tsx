@@ -131,95 +131,106 @@ const LobbyOverlay: React.FC<LobbyOverlayProps> = ({
           sx={{
             position: 'absolute',
             inset: 0,
-            background: 'linear-gradient(135deg, rgba(0,0,0,0.15) 0%, rgba(25,25,35,0.12) 100%)',
-            backdropFilter: 'blur(20px)',
+            background: 'rgba(8, 8, 12, 0.85)',
+            backdropFilter: 'blur(16px)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
             zIndex: 1200,
           }}
         >
-                        <Box
-        sx={{
-          position: 'absolute',
-          top: 10,
-          right: 10,
-          bgcolor: 'rgba(255,255,255,0.1)',
-          padding: 1,
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 1,
-        }}
-      >
-        <Typography variant="caption" sx={{ color: 'white', display: 'block' }}>
-          UserID: {userId || 'Not set'}
-        </Typography>
-        <Typography variant="caption" sx={{ color: 'white', display: 'block' }}>
-          RoomID: {roomId || 'Not set'}
-        </Typography>
-        <Typography variant="caption" sx={{ color: 'white', display: 'block' }}>
-          Initiator: {isInitiator ? 'Yes' : 'No'}
-        </Typography>
-        <Typography variant="caption" sx={{ color: 'white', display: 'block' }}>
-          Participants: {participantCount}
-        </Typography>
-        {/* Show TURN server status */}
-        <Typography variant="caption" sx={{ color: 'white', display: 'block' }}>
-          TURN Server: {turnConfigValid ? 'Connected' : 'Disconnected'}
-        </Typography>
-        {/* Show relay policy */}
-        <Typography variant="caption" sx={{ color: 'white', display: 'block' }}>
-          Relay Policy: {config.iceTransportPolicy}
-        </Typography>
-      </Box>
+          {/* Debug Info Panel */}
+          <Box
+            sx={{
+              position: 'absolute',
+              top: 16,
+              right: 16,
+              bgcolor: 'rgba(255, 255, 255, 0.03)',
+              borderRadius: '12px',
+              padding: 2,
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 1,
+              border: '1px solid rgba(255, 255, 255, 0.05)',
+              backdropFilter: 'blur(12px)',
+            }}
+          >
+            <Typography variant="caption" sx={{ color: 'white', display: 'block' }}>
+              UserID: {userId || 'Not set'}
+            </Typography>
+            <Typography variant="caption" sx={{ color: 'white', display: 'block' }}>
+              RoomID: {roomId || 'Not set'}
+            </Typography>
+            <Typography variant="caption" sx={{ color: 'white', display: 'block' }}>
+              Initiator: {isInitiator ? 'Yes' : 'No'}
+            </Typography>
+            <Typography variant="caption" sx={{ color: 'white', display: 'block' }}>
+              Participants: {participantCount}
+            </Typography>
+            {/* Show TURN server status */}
+            <Typography variant="caption" sx={{ color: 'white', display: 'block' }}>
+              TURN Server: {turnConfigValid ? 'Connected' : 'Disconnected'}
+            </Typography>
+            {/* Show relay policy */}
+            <Typography variant="caption" sx={{ color: 'white', display: 'block' }}>
+              Relay Policy: {config.iceTransportPolicy}
+            </Typography>
+          </Box>
           <Paper
             elevation={0}
             sx={{
               width: '100%',
-              maxWidth: '900px',
+              maxWidth: '800px',
               mx: 3,
-              background: 'linear-gradient(145deg, rgba(45,45,55,0.3) 20%, rgba(25,25,35,0.3) 65%)',
-              border: '1px solid rgba(255,255,255,0.08)',
-              borderRadius: '3px',
+              background: 'rgba(255, 255, 255, 0.03)',
+              border: '1px solid rgba(255, 255, 255, 0.05)',
+              borderRadius: '24px',
               backdropFilter: 'blur(12px)',
-              p: { xs: 2, md: 4 },
+              p: { xs: 3, md: 5 },
               position: 'relative',
             }}
           >
             {/* Header */}
-            <Box textAlign="center" mb={4}>
+            <Box textAlign="center" mb={5}>
               <Typography
-                fontSize={32}
+                variant="h1"
                 sx={{
-                  color: 'rgba(255,255,255,0.9)',
-                  fontWeight: 600,
-                  mb: 1,
+                  fontSize: '2.5rem',
+                  fontWeight: 800,
+                  background: 'linear-gradient(45deg, #6366f1, #8b5cf6)',
+                  WebkitBackgroundClip: 'text',
+                  WebkitTextFillColor: 'transparent',
+                  mb: 2,
                 }}
               >
-                Secure Ephemeral Communication
+                Ready to Connect
               </Typography>
               <Typography
-                variant="body2"
+                variant="body1"
                 sx={{
-                  color: 'rgba(255,255,255,0.6)',
-                  fontSize: '0.95rem',
+                  color: 'rgba(255, 255, 255, 0.7)',
+                  fontSize: '1.1rem',
                 }}
               >
                 {isInitiator
-                  ? 'Ready to start the meeting? Waiting on at least one participant to join.'
-                  : 'Waiting for host to start...'}
+                  ? 'Share this link with others to join your secure call.'
+                  : 'Waiting for the host to start the call...'}
               </Typography>
             </Box>
 
             {/* Room Link */}
             <Box
               sx={{
-                mb: 4,
+                mb: 5,
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                gap: 1,
-         
+                gap: 2,
+                background: 'rgba(255, 255, 255, 0.02)',
+                border: '1px solid rgba(255, 255, 255, 0.05)',
+                borderRadius: '12px',
+                py: 2,
+                px: 3,
               }}
             >
               <Typography
@@ -248,40 +259,60 @@ const LobbyOverlay: React.FC<LobbyOverlayProps> = ({
             </Box>
 
             {/* Device Controls and Status */}
-            <Grid container spacing={2} mb={4}>
+            <Grid container spacing={3} mb={5}>
               <Grid item xs={12} md={4}>
-                <DeviceToggle
-                  enabled={isCameraEnabled}
-                  onToggle={handleCameraToggle}
-                  enabledIcon={VideocamIcon}
-                  disabledIcon={VideocamOffIcon}
-                  label="Camera"
-                />
-              </Grid>
-              <Grid item xs={12} md={4}>
-                <DeviceToggle
-                  enabled={isMicrophoneEnabled}
-                  onToggle={handleMicrophoneToggle}
-                  enabledIcon={MicIcon}
-                  disabledIcon={MicOffIcon}
-                  label="Microphone"
-                />
+                <Paper
+                  elevation={0}
+                  sx={{
+                    p: 2,
+                    background: 'rgba(255, 255, 255, 0.02)',
+                    border: '1px solid rgba(255, 255, 255, 0.05)',
+                    borderRadius: '12px',
+                  }}
+                >
+                  <DeviceToggle
+                    enabled={isCameraEnabled}
+                    onToggle={handleCameraToggle}
+                    enabledIcon={VideocamIcon}
+                    disabledIcon={VideocamOffIcon}
+                    label="Camera"
+                  />
+                </Paper>
               </Grid>
               <Grid item xs={12} md={4}>
                 <Paper
                   elevation={0}
                   sx={{
                     p: 2,
-                    background: 'rgba(45,45,55,0.3)',
-                    border: '1px solid rgba(255,255,255,0.06)',
-                    borderRadius: '3px',
+                    background: 'rgba(255, 255, 255, 0.02)',
+                    border: '1px solid rgba(255, 255, 255, 0.05)',
+                    borderRadius: '12px',
+                  }}
+                >
+                  <DeviceToggle
+                    enabled={isMicrophoneEnabled}
+                    onToggle={handleMicrophoneToggle}
+                    enabledIcon={MicIcon}
+                    disabledIcon={MicOffIcon}
+                    label="Microphone"
+                  />
+                </Paper>
+              </Grid>
+              <Grid item xs={12} md={4}>
+                <Paper
+                  elevation={0}
+                  sx={{
+                    p: 2,
+                    background: 'rgba(255, 255, 255, 0.02)',
+                    border: '1px solid rgba(255, 255, 255, 0.05)',
+                    borderRadius: '12px',
                     display: 'flex',
                     alignItems: 'center',
                     gap: 2,
                   }}
                 >
-                  <GroupIcon sx={{ color: 'primary.main', fontSize: 20 }} />
-                  <Typography sx={{ color: 'rgba(255,255,255,0.8)', fontSize: '0.9rem' }}>
+                  <GroupIcon sx={{ color: '#6366f1', fontSize: 20 }} />
+                  <Typography sx={{ color: 'rgba(255, 255, 255, 0.8)', fontSize: '0.9rem' }}>
                     {`${participantCount} Participant${participantCount !== 1 ? 's' : ''}`}
                   </Typography>
                 </Paper>
@@ -291,12 +322,12 @@ const LobbyOverlay: React.FC<LobbyOverlayProps> = ({
             {/* Participants List */}
             <Paper
               sx={{
-                mb: 4,
-                background: 'rgba(45,45,55,0.3)',
-                border: '1px solid rgba(255,255,255,0.06)',
-                borderRadius: '3px',
-                maxHeight: '150px',
-                overflow: 'scroll',
+                mb: 5,
+                background: 'rgba(255, 255, 255, 0.02)',
+                border: '1px solid rgba(255, 255, 255, 0.05)',
+                borderRadius: '12px',
+                maxHeight: '200px',
+                overflow: 'auto',
               }}
             >
               <List dense>
@@ -345,45 +376,57 @@ const LobbyOverlay: React.FC<LobbyOverlayProps> = ({
             </Paper>
 
             {/* Ready/Start Controls */}
-            <Box sx={{ width: '100%', display: 'flex', justifyContent: 'flex-end' }}>
-              {
-                isInitiator && (
-                  <Button
+            <Box sx={{ width: '100%', display: 'flex', justifyContent: 'center', mb: 4 }}>
+              {isInitiator && (
+                <Button
                   variant="contained"
-                  size="small"
+                  size="large"
                   disableElevation
                   onClick={onStartMeeting}
                   disabled={!canStartMeeting}
                   sx={{
-                    minWidth: 130,
-                    height: 36,
+                    minWidth: 200,
+                    py: 2,
+                    px: 6,
                     textTransform: 'none',
-                    fontSize: '0.95rem',
-                    fontWeight: 500,
-                    borderRadius: '3px',
-                    background: canStartMeeting
-                      ? 'linear-gradient(135deg, #48bb78 100%, #38a169 100%)'
-                      : 'linear-gradient(135deg, #4299e1 100%, #667eea 100%)',
+                    fontSize: '1.1rem',
+                    fontWeight: 600,
+                    borderRadius: '12px',
+                    background: 'linear-gradient(45deg, #6366f1, #8b5cf6)',
                     opacity: canStartMeeting ? 1 : 0.5,
                     '&:hover': {
-                      opacity: canStartMeeting ? 0.9 : 0.5,
+                      background: 'linear-gradient(45deg, #4f46e5, #7c3aed)',
+                      opacity: canStartMeeting ? 1 : 0.5,
                     },
                   }}
                 >
-                  {mediaReady ? (participants.length > 0 ? 'Start Meeting' : 'Waiting for participants...') : 'Setting up media...'}
+                  {mediaReady
+                    ? participants.length > 0
+                      ? 'Start Call'
+                      : 'Waiting for Participants...'
+                    : 'Setting up Media...'}
                 </Button>
-                )
-              }
-             
+              )}
             </Box>
 
-            <Box sx={{ maxHeight: 350, overflow: 'scroll', mt: 6, borderTop: '1px solid rgba(255,255,255,0.08)', pt: 4 }}>
+            {/* Privacy Section */}
+            <Box
+              sx={{
+                maxHeight: 350,
+                overflow: 'auto',
+                mt: 4,
+                pt: 4,
+                borderTop: '1px solid rgba(255, 255, 255, 0.05)',
+              }}
+            >
               <Typography
-                component="h2"
+                variant="h2"
                 sx={{
-                  fontSize: '1.5rem',
-                  color: 'rgba(255,255,255,0.9)',
-                  fontWeight: 600,
+                  fontSize: '1.75rem',
+                  fontWeight: 700,
+                  background: 'linear-gradient(45deg, #6366f1, #8b5cf6)',
+                  WebkitBackgroundClip: 'text',
+                  WebkitTextFillColor: 'transparent',
                   mb: 3,
                 }}
               >

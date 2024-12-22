@@ -2,17 +2,17 @@ import { AppBar as MuiAppBar, styled, Box, Typography, useTheme } from "@mui/mat
 import StyledToolbar from "./toolbar";
 
 const StyledAppBar = styled(MuiAppBar)(({ theme }) => ({
-  background: `linear-gradient(180deg, ${theme.palette.background.paper} 0%, rgba(19, 47, 76, 0.95) 100%)`,
-  backdropFilter: 'blur(10px)',
-  borderBottom: `1px solid ${theme.palette.primary.dark}40`,
-  boxShadow: '0 4px 30px rgba(0, 0, 0, 0.1)'
+  background: 'rgba(8, 8, 12, 0.7)',
+  backdropFilter: 'blur(12px)',
+  borderBottom: '1px solid rgba(255, 255, 255, 0.05)',
+  boxShadow: 'none'
 }));
 
 const LogoWrapper = styled(Box)(({ theme }) => ({
   display: 'flex',
   alignItems: 'center',
-  gap: '12px',
-  padding: theme.spacing(0, 1)
+  gap: '8px',
+  padding: theme.spacing(0, 2)
 }));
 
 function AppBar() {
@@ -25,15 +25,15 @@ function AppBar() {
           <Typography 
             variant="h6" 
             sx={{ 
-              fontWeight: 700,
-              background: `linear-gradient(45deg, ${theme.palette.primary.main}, ${theme.palette.primary.light})`,
+              fontWeight: 800,
+              background: `linear-gradient(45deg, ${theme.palette.primary.main}, ${theme.palette.secondary.main})`,
               WebkitBackgroundClip: 'text',
               WebkitTextFillColor: 'transparent',
               letterSpacing: '0.5px',
-              textShadow: '0 2px 4px rgba(0,0,0,0.2)'
+              fontSize: '1.25rem'
             }}
           >
-            phantom
+            nochat.io
           </Typography>
         </LogoWrapper>
       </StyledToolbar>

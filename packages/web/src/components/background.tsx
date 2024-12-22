@@ -7,7 +7,7 @@ class Line {
     this.startDot = startDot;
     this.endDot = endDot;
     this.life = 1;
-    this.maxDistance = 0.3;
+    this.maxDistance = 0.25;
   }
 
   update() {
@@ -79,9 +79,9 @@ const ThreeBackground = () => {
     `;
 
     const uniforms = {
-      colorA: { value: new THREE.Color(30/255, 50/255, 90/255) },  // Inner color (lighter)
-      colorB: { value: new THREE.Color(15/255, 21/255, 37/255) },  // Outer color (darker)
-      center: { value: new THREE.Vector2(0.5, 0.3) }  // Shifted center point (x, y)
+      colorA: { value: new THREE.Color(18/255, 18/255, 24/255) },  // Inner color (darker)
+      colorB: { value: new THREE.Color(8/255, 8/255, 12/255) },    // Outer color (even darker)
+      center: { value: new THREE.Vector2(0.6, 0.4) }  // Adjusted center point
     };
 
     const material = new THREE.ShaderMaterial({
@@ -100,14 +100,13 @@ const ThreeBackground = () => {
     scene.add(dotsGroup);
     scene.add(linesGroup);
 
-    const dotGeometry = new THREE.SphereGeometry(0.005, 32, 32);
     const dotColors = [
-      new THREE.Color(0x3366cc),  // Lighter blue
-      new THREE.Color(0x1a3366),  // Darker blue
-      new THREE.Color(0xffffff),  // White
+      new THREE.Color(0x6366f1),  // Indigo
+      new THREE.Color(0x8b5cf6),  // Purple
+      new THREE.Color(0xc084fc),  // Light purple
     ];
 
-    const numDots = 80;
+    const numDots = 60;
     const dots = [];
     const lines = [];
 
@@ -119,12 +118,13 @@ const ThreeBackground = () => {
       const dotMaterial = new THREE.MeshPhongMaterial({
         color: dotColors[i % dotColors.length],
         emissive: dotColors[i % dotColors.length],
-        specular: 0x111111,
-        shininess: 30,
+        specular: 0x222222,
+        shininess: 20,
         transparent: true,
-        opacity: 0.7
+        opacity: 0.5
       });
 
+      const dotGeometry = new THREE.SphereGeometry(0.004, 32, 32);
       const dot = new THREE.Mesh(dotGeometry, dotMaterial);
       dot.position.set(
         Math.random() * 2 - 1,
