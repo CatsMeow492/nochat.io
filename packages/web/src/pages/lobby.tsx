@@ -140,42 +140,7 @@ const LobbyOverlay: React.FC<LobbyOverlayProps> = ({
           }}
         >
           {/* Debug Info Panel */}
-          <Box
-            sx={{
-              position: 'absolute',
-              top: 16,
-              right: 16,
-              bgcolor: 'rgba(255, 255, 255, 0.03)',
-              borderRadius: '12px',
-              padding: 2,
-              display: 'flex',
-              flexDirection: 'column',
-              gap: 1,
-              border: '1px solid rgba(255, 255, 255, 0.05)',
-              backdropFilter: 'blur(12px)',
-            }}
-          >
-            <Typography variant="caption" sx={{ color: 'white', display: 'block' }}>
-              UserID: {userId || 'Not set'}
-            </Typography>
-            <Typography variant="caption" sx={{ color: 'white', display: 'block' }}>
-              RoomID: {roomId || 'Not set'}
-            </Typography>
-            <Typography variant="caption" sx={{ color: 'white', display: 'block' }}>
-              Initiator: {isInitiator ? 'Yes' : 'No'}
-            </Typography>
-            <Typography variant="caption" sx={{ color: 'white', display: 'block' }}>
-              Participants: {participantCount}
-            </Typography>
-            {/* Show TURN server status */}
-            <Typography variant="caption" sx={{ color: 'white', display: 'block' }}>
-              TURN Server: {turnConfigValid ? 'Connected' : 'Disconnected'}
-            </Typography>
-            {/* Show relay policy */}
-            <Typography variant="caption" sx={{ color: 'white', display: 'block' }}>
-              Relay Policy: {config.iceTransportPolicy}
-            </Typography>
-          </Box>
+         
           <Paper
             elevation={0}
             sx={{

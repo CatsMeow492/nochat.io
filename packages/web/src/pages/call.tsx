@@ -790,59 +790,7 @@ const CallView = () => {
         />
       )}
 
-      <Box
-        sx={{
-          position: 'absolute',
-          top: 16,
-          right: 16,
-          bgcolor: 'rgba(255, 255, 255, 0.03)',
-          borderRadius: '12px',
-          padding: 2,
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 1,
-          border: '1px solid rgba(255, 255, 255, 0.05)',
-          backdropFilter: 'blur(12px)',
-          zIndex: 1000
-        }}
-      >
-        <Typography variant="caption" sx={{ color: 'white', display: 'block' }}>
-          UserID: {userId || 'Not set'}
-        </Typography>
-        <Typography variant="caption" sx={{ color: 'white', display: 'block' }}>
-          RoomID: {roomId || 'Not set'}
-        </Typography>
-        <Typography variant="caption" sx={{ color: 'white', display: 'block' }}>
-          Initiator: {isInitiator ? 'Yes' : 'No'}
-        </Typography>
-        <Typography variant="caption" sx={{ color: 'white', display: 'block' }}>
-          ICE State: {userId ? peerConnections.get(userId)?.connection.iceConnectionState || 'Not connected' : 'No user ID'}
-        </Typography>
-        <Typography variant="caption" sx={{ color: 'white', display: 'block' }}>
-          Gathering: {userId ? peerConnections.get(userId)?.connection.iceGatheringState || 'Not gathering' : 'No user ID'}
-        </Typography>
-        <Typography variant="caption" sx={{ color: 'white', display: 'block' }}>
-          Version: {VERSION}
-        </Typography>
-        <Typography variant="caption" sx={{ color: 'white', display: 'block' }}>
-          Participants: {participantCount}
-        </Typography>
-        
-        {/* Add peer status section */}
-        <Typography variant="caption" sx={{ color: 'white', display: 'block', fontWeight: 'bold' }}>
-          Peer Status: ({peerConnections.size}) [Update: {peerUpdateCounter}]
-        </Typography>
-        {Array.from(peerConnections.entries()).map(([peerId, peer]) => (
-          <Box key={`${peerId}-${peerUpdateCounter}`} sx={{ pl: 1 }}>
-            <Typography variant="caption" sx={{ color: 'white', display: 'block' }}>
-              {short(peerId)}: {' '}
-              {peer.trackStatus.audio ? '🔊' : '🔇'} {' '}
-              {peer.trackStatus.video ? '📹' : '❌'} {' '}
-              ({peer.connection.connectionState})
-            </Typography>
-          </Box>
-        ))}
-      </Box>
+      
 
       <Box
         sx={{
