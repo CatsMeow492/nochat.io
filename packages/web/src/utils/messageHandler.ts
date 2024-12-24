@@ -17,6 +17,10 @@ let internalState = {
 let lastIceRestart = 0;
 const ICE_RESTART_COOLDOWN = 1000; // 1 second
 
+// Add at the top with other constants
+const ICE_RETRY_MAX = 3;
+const ICE_RETRY_DELAY = 2000; // 2 seconds
+
 function triggerIceRestart() {
   const now = Date.now();
   if (now - lastIceRestart < ICE_RESTART_COOLDOWN) {
@@ -413,11 +417,24 @@ const testIceServer = async (server: RTCIceServer): Promise<boolean> => {
 // Add this function near the top with other utility functions
 const getIceServers = async () => {
     try {
-        const response = await fetch('/api/ice-servers');
+        const url = '/api/ice-servers';
+        logMsg('[ICE]', `Fetching from URL: ${url}`);
+        const response = await fetch(url);
+        
+        logMsg('[ICE]', `Response status: ${response.status}`);
+        logMsg('[ICE]', `Response headers:`, Object.fromEntries(response.headers));
+        
+        // Clone response and get text for logging
+        const clonedResponse = response.clone();
+        const responseText = await clonedResponse.text();
+        logMsg('[ICE]', `Raw response:`, responseText);
+
         if (!response.ok) {
             throw new Error(`HTTP error! status: ${response.status}`);
         }
+        
         const data = await response.json();
+        logMsg('[ICE]', 'Parsed response:', data);
         console.log('[ICE] Fetched servers:', data.iceServers);
         return data.iceServers;
     } catch (error) {
@@ -515,12 +532,13 @@ const setupPeerConnection = async (peerId: string, deps: MessageHandlerDependenc
     };
 
     pc.oniceconnectionstatechange = () => {
-        const state = pc.iceConnectionState;
-        logMsg('ICE', `Connection state for ${peerId}: ${state}`);
+        logMsg('ICE', `Connection state for ${peerId}: ${pc.iceConnectionState}`);
         
-        if (state === 'disconnected' || state === 'failed') {
-            logMsg('ICE', `Connection issues with ${peerId}, attempting recovery`);
-            pc.restartIce();
+        if (pc.iceConnectionState === 'failed' || pc.iceConnectionState === 'disconnected') {
+            retryIceConnection(pc, peerId, deps);
+        } else if (pc.iceConnectionState === 'connected') {
+            // Reset any recovery flags when successfully connected
+            recoveryAttempted.set(peerId, false);
         }
     };
 
@@ -670,25 +688,65 @@ function createPeerStreamManager(stream: MediaStream): PeerStreamManager {
 }
 
 const processQueuedCandidates = async (pc: RTCPeerConnection, peerId: string) => {
-    if (!pc.remoteDescription || !pc.currentRemoteDescription) {
+    if (!pc.remoteDescription) {
         logMsg('ICE', `Skipping candidate processing - no remote description yet for ${peerId}`);
         return;
     }
 
     const candidates = iceCandidateQueue.get(peerId) || [];
     logMsg('ICE', `Processing ${candidates.length} queued candidates for ${peerId}`);
-    logMsg('ICE', `Connection state: ${pc.connectionState}, ICE state: ${pc.iceConnectionState}`);
     
     if (candidates.length > 0) {
+        // Sort candidates to prioritize relay candidates
+        candidates.sort((a, b) => {
+            const aIsRelay = a.candidate.includes('relay');
+            const bIsRelay = b.candidate.includes('relay');
+            return bIsRelay ? 1 : aIsRelay ? -1 : 0;
+        });
+
         for (const candidate of candidates) {
             try {
                 await pc.addIceCandidate(candidate);
-                logMsg('ICE', `Successfully added queued candidate: ${candidate.candidate}`);
+                logMsg('ICE', `Added queued candidate for ${peerId}: ${candidate.candidate.slice(0, 50)}...`);
             } catch (error) {
                 logMsg('ERROR', `Failed to add ICE candidate: ${error}`);
             }
         }
         iceCandidateQueue.delete(peerId);
+    }
+};
+
+// Add this new function
+const retryIceConnection = async (pc: RTCPeerConnection, peerId: string, deps: MessageHandlerDependencies, attempt = 0) => {
+    if (attempt >= ICE_RETRY_MAX) {
+        logMsg('ICE', `Failed to establish connection with ${peerId} after ${ICE_RETRY_MAX} attempts`);
+        return;
+    }
+
+    if (pc.iceConnectionState === 'failed' || pc.iceConnectionState === 'disconnected') {
+        logMsg('ICE', `Retrying ICE connection for ${peerId}, attempt ${attempt + 1}`);
+        try {
+            await pc.restartIce();
+            // Create new offer if we're the initiator
+            if (deps.getState().isInitiator) {
+                const offer = await pc.createOffer({ iceRestart: true });
+                await pc.setLocalDescription(offer);
+                deps.sendMessage('offer', {
+                    sdp: offer,
+                    fromPeerID: deps.getState().userId,
+                    targetPeerID: peerId
+                });
+            }
+            
+            // Set a timeout for the next retry
+            setTimeout(() => {
+                if (pc.iceConnectionState !== 'connected' && pc.iceConnectionState !== 'completed') {
+                    retryIceConnection(pc, peerId, deps, attempt + 1);
+                }
+            }, ICE_RETRY_DELAY);
+        } catch (error) {
+            logMsg('ERROR', `ICE retry failed for ${peerId}: ${error}`);
+        }
     }
 };
 
@@ -703,32 +761,35 @@ export const createMessageHandler = (deps: MessageHandlerDependencies) => {
                 deps.setState.setMeetingStarted(true);
                 deps.log('Meeting started - transitioning from lobby');
                 
-                // Test STUN/TURN servers
-                const twilioIceServers = [
-                    {
-                        urls: 'stun:global.stun.twilio.com:3478'
-                    },
-                    {
-                        urls: 'turn:global.turn.twilio.com:3478?transport=udp',
-                        username: '94316fe60bfab4243fd0b49dd93e8311a9ada880c39782d2237864fd54d95d86',
-                        credential: '2vaj9tQQU1F385vsKvblIF0enj4dIwlWsczo9zk6x5s='
-                    },
-                    {
-                        urls: 'turn:global.turn.twilio.com:3478?transport=tcp',
-                        username: '94316fe60bfab4243fd0b49dd93e8311a9ada880c39782d2237864fd54d95d86',
-                        credential: '2vaj9tQQU1F385vsKvblIF0enj4dIwlWsczo9zk6x5s='
-                    },
-                    {
-                        urls: 'turn:global.turn.twilio.com:443?transport=tcp',
-                        username: '94316fe60bfab4243fd0b49dd93e8311a9ada880c39782d2237864fd54d95d86',
-                        credential: '2vaj9tQQU1F385vsKvblIF0enj4dIwlWsczo9zk6x5s='
+                // Fetch ICE servers from our endpoint
+                try {
+                    logMsg('[ICE]', 'Fetching ICE servers...');
+                    const response = await fetch('/api/ice-servers');
+                    if (!response.ok) {
+                        throw new Error(`HTTP error! status: ${response.status}`);
                     }
-                ];
-
-                logMsg('[ICE]', 'Testing STUN/TURN servers...');
-                for (const server of twilioIceServers) {
-                    const isWorking = await testIceServer(server);
-                    logMsg('ICE', `Server ${server.urls} ${isWorking ? 'is working' : 'failed'}`);
+                    const data = await response.json();
+                    const iceServers = data.iceServers;
+                    
+                    // Test the fetched ICE servers
+                    logMsg('[ICE]', 'Testing STUN/TURN servers...');
+                    for (const server of iceServers) {
+                        const isWorking = await testIceServer(server);
+                        logMsg('[ICE]', `Server ${server.urls} ${isWorking ? 'is working' : 'failed'}`);
+                    }
+                    
+                    // Update RTCConfiguration with new ICE servers
+                    deps.setState.setRtcConfig({
+                        ...deps.getState().rtcConfig,
+                        iceServers
+                    });
+                } catch (error) {
+                    logMsg('ERROR', `Failed to fetch ICE servers: ${error}`);
+                    // Fall back to public STUN server
+                    deps.setState.setRtcConfig({
+                        ...deps.getState().rtcConfig,
+                        iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+                    });
                 }
                 
                 // Check local media state

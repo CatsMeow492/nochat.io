@@ -82,6 +82,7 @@ const CallView = () => {
   const [videoTracks, setVideoTracks] = useState<{ [key: string]: MediaStreamTrack[] }>({});
   const [peerStates, setPeerStates] = useState<Map<string, any>>(new Map());
   const [peerUpdateCounter, setPeerUpdateCounter] = useState(0);
+  const [rtcConfig, setRTCConfiguration] = useState<RTCConfiguration>(RTCConfiguration);
 
   // const { data: participants } = useUserList({ roomId: String(roomId), enabled: !!roomId && !meetingStarted} )
   console.debug(`User list enabled `, !!roomId && !meetingStarted)
@@ -252,6 +253,10 @@ const CallView = () => {
           });
           remoteStreamsRef.current = newStreams;
           setRemoteStreams(newStreams);
+        },
+        setRtcConfig: (config: RTCConfiguration) => {
+          console.log('Updating RTC config:', config);
+          setRTCConfiguration(config);
         },
       },
       summarizeSDP: (sdp: string) => sdp,

@@ -43,6 +43,7 @@ export interface MessageHandlerDependencies {
     setIceCandidateQueue: (queue: Map<string, RTCIceCandidate[]>) => void;
     setActivePeers: (peers: Set<string>) => void;
     setRemoteStreams: (streams: Map<string, MediaStream>) => void;
+    setRtcConfig: (config: RTCConfiguration) => void;
   };
   summarizeSDP: (sdp: string) => any;
   setWindowState: (state: string) => void;
