@@ -410,32 +410,29 @@ const testIceServer = async (server: RTCIceServer): Promise<boolean> => {
     }
 };
 
+// Add this function near the top with other utility functions
+const getIceServers = async () => {
+    try {
+        const response = await fetch('/api/ice-servers');
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        const data = await response.json();
+        console.log('[ICE] Fetched servers:', data.iceServers);
+        return data.iceServers;
+    } catch (error) {
+        console.error('[ICE] Failed to fetch servers:', error);
+        // Fallback to public STUN server
+        return [{ urls: 'stun:stun.l.google.com:19302' }];
+    }
+};
+
 // Update the setupPeerConnection function
 const setupPeerConnection = async (peerId: string, deps: MessageHandlerDependencies): Promise<RTCPeerConnection> => {
-    const twilioIceServers = [
-        {
-            urls: 'stun:global.stun.twilio.com:3478'
-        },
-        {
-            urls: 'turn:global.turn.twilio.com:3478?transport=udp',
-            username: '94316fe60bfab4243fd0b49dd93e8311a9ada880c39782d2237864fd54d95d86',
-            credential: '2vaj9tQQU1F385vsKvblIF0enj4dIwlWsczo9zk6x5s='
-        },
-        {
-            urls: 'turn:global.turn.twilio.com:3478?transport=tcp',
-            username: '94316fe60bfab4243fd0b49dd93e8311a9ada880c39782d2237864fd54d95d86',
-            credential: '2vaj9tQQU1F385vsKvblIF0enj4dIwlWsczo9zk6x5s='
-        },
-        {
-            urls: 'turn:global.turn.twilio.com:443?transport=tcp',
-            username: '94316fe60bfab4243fd0b49dd93e8311a9ada880c39782d2237864fd54d95d86',
-            credential: '2vaj9tQQU1F385vsKvblIF0enj4dIwlWsczo9zk6x5s='
-        }
-    ];
-
+    const iceServers = await getIceServers();
+    
     const pc = new RTCPeerConnection({
-        iceServers: twilioIceServers,
-        ...deps.getState().rtcConfig,
+        iceServers,
         iceTransportPolicy: 'all',
         bundlePolicy: 'max-bundle',
         iceCandidatePoolSize: 10,

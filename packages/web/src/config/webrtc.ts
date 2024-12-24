@@ -1,10 +1,10 @@
 import { getWsUrl } from '../utils/url';
 
 // Base URL should be HTTP/HTTPS
-export const BASE_URL = process.env.REACT_APP_API_URL || 'https://dev-signaling-service.secpapp.com';
+export const BASE_URL = process.env.REACT_APP_API_URL || 'https://nochat.io';
 
 // WebSocket URL for real-time connections
-export const SIGNALING_SERVICE_URL = process.env.REACT_APP_SIGNALING_SERVICE_URL || 'https://dev-signaling-service.secpapp.com';
+export const SIGNALING_SERVICE_URL = process.env.REACT_APP_SIGNALING_SERVICE_URL || 'https://nochat.io';
 
 // Debug logs
 if (process.env.NODE_ENV === 'development') {

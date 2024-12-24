@@ -1,5 +1,5 @@
 # Use the official Go image as a base
-FROM golang:1.20-alpine as builder
+FROM golang:1.20 as builder
 
 # Set the working directory
 WORKDIR /app

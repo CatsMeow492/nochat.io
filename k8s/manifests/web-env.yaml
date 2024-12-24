@@ -5,4 +5,5 @@ metadata:
   namespace: nochat
 data:
   .env: |
-    REACT_APP_SIGNALING_SERVICE_URL=ws://nochat-signaling.nochat.svc.cluster.local:8080
+    REACT_APP_API_URL=wss://nochat.io/signaling
+    REACT_APP_SIGNALING_SERVICE_URL=wss://nochat.io/signaling

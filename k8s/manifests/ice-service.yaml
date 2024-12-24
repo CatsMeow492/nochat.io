@@ -1,0 +1,56 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nochat-ice
+  namespace: nochat
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nochat-ice
+  template:
+    metadata:
+      labels:
+        app: nochat-ice
+    spec:
+      containers:
+      - name: ice
+        image: 500532294210.dkr.ecr.us-east-1.amazonaws.com/nochat-ice:0.0.7
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8081
+        env:
+        - name: TWILIO_ACCOUNT_SID
+          valueFrom:
+            secretKeyRef:
+              name: twilio
+              key: account-sid
+        - name: TWILIO_AUTH_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: twilio
+              key: auth-token
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8081
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8081
+          initialDelaySeconds: 5
+          periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nochat-ice
+  namespace: nochat
+spec:
+  ports:
+  - port: 8081
+    targetPort: 8081
+  selector:
+    app: nochat-ice 
