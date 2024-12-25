@@ -21,6 +21,13 @@ type Contact struct {
 	Status    string `json:"status"`
 }
 
+type ContactResponse struct {
+	ID            string `json:"id"`
+	Name          string `json:"name"`
+	Email         string `json:"email,omitempty"`
+	WalletAddress string `json:"wallet_address,omitempty"`
+}
+
 func NewContactsHandler(db *sql.DB) *ContactsHandler {
 	return &ContactsHandler{db: db}
 }
@@ -64,11 +71,19 @@ func (h *ContactsHandler) GetContacts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Get all contacts for the user
 	rows, err := h.db.Query(`
-		SELECT user_id, contact_id, status
-		FROM contacts
-		WHERE user_id = $1 OR contact_id = $1
+		SELECT u.id, u.name, COALESCE(u.email, '') as email, COALESCE(u.wallet_address, '') as wallet_address
+		FROM contacts c
+		JOIN users u ON (c.contact_id = u.id)
+		WHERE c.user_id = $1
+		UNION
+		SELECT u.id, u.name, COALESCE(u.email, '') as email, COALESCE(u.wallet_address, '') as wallet_address
+		FROM contacts c
+		JOIN users u ON (c.user_id = u.id)
+		WHERE c.contact_id = $1
 	`, userID)
+
 	if err != nil {
 		log.Printf("Error getting contacts: %v", err)
 		http.Error(w, "Error getting contacts", http.StatusInternalServerError)
@@ -76,15 +91,15 @@ func (h *ContactsHandler) GetContacts(w http.ResponseWriter, r *http.Request) {
 	}
 	defer rows.Close()
 
-	var contacts []Contact
+	var contacts []ContactResponse
 	for rows.Next() {
-		var c Contact
-		if err := rows.Scan(&c.UserID, &c.ContactID, &c.Status); err != nil {
+		var contact ContactResponse
+		err := rows.Scan(&contact.ID, &contact.Name, &contact.Email, &contact.WalletAddress)
+		if err != nil {
 			log.Printf("Error scanning contact: %v", err)
-			http.Error(w, "Error getting contacts", http.StatusInternalServerError)
-			return
+			continue
 		}
-		contacts = append(contacts, c)
+		contacts = append(contacts, contact)
 	}
 
 	w.Header().Set("Content-Type", "application/json")

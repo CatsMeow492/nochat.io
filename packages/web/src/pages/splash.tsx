@@ -4,7 +4,14 @@ import { Mic, Computer as ComputerIcon, Videocam as VideocamIcon } from '@mui/ic
 import { Box, Typography, Button } from '@mui/material';
 import ThreeBackground from '../components/Background/webgl_background';
 import AppBar from '../components/appbar';
-import Logo from '../logo.svg';
+import ContactsList from '../components/ContactsList';
+
+interface User {
+  id: string;
+  email?: string;
+  name: string;
+  wallet_address?: string;
+}
 
 /**
  * Splash Component
@@ -16,9 +23,21 @@ import Logo from '../logo.svg';
 const Splash: React.FC = () => {
   const navigate = useNavigate();
   const [showBackground, setShowBackground] = useState(false);
+  const [user, setUser] = useState<User | null>(null);
 
   useEffect(() => {
     setShowBackground(true);
+    // Check if user is logged in
+    const userId = localStorage.getItem('userId');
+    if (userId) {
+      fetch(`https://nochat.io/api/users/${userId}`)
+        .then(res => res.json())
+        .then(data => setUser(data))
+        .catch(err => {
+          console.error('Error fetching user:', err);
+          localStorage.removeItem('userId');
+        });
+    }
     return () => {
       setShowBackground(false);
     };
@@ -50,79 +69,88 @@ const Splash: React.FC = () => {
           alignItems: 'center',
           flexDirection: 'column',
           zIndex: 1,
+          pt: '80px', // Add padding top to account for AppBar
         }}
       >
-        <Box
-          sx={{
-            backgroundColor: 'rgba(255, 255, 255, 0.03)',
-            borderRadius: '24px',
-            padding: '48px',
-            width: '480px',
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            textAlign: 'center',
-            backdropFilter: 'blur(12px)',
-            border: '1px solid rgba(255, 255, 255, 0.05)',
-            boxShadow: '0 8px 32px rgba(0, 0, 0, 0.2)',
-          }}
-        >
-          <Typography
-            variant="h1"
-            sx={{
-              fontSize: '2.5rem',
-              fontWeight: 800,
-              background: `linear-gradient(45deg, #6366f1, #8b5cf6)`,
-              WebkitBackgroundClip: 'text',
-              WebkitTextFillColor: 'transparent',
-              mb: 2
-            }}
-          >
-            nochat.io
-          </Typography>
-          
-          <Typography
-            variant="body1"
-            sx={{
-              color: 'rgba(255, 255, 255, 0.7)',
-              mb: 4,
-              maxWidth: '320px'
-            }}
-          >
-            Zero-hassle, zero-traces video meetings—secured by blockchain and P2P technology.
-          </Typography>
-
+        {user ? (
+          <ContactsList 
+            userEmail={user.email}
+            userWallet={user.wallet_address}
+            userId={user.id}
+          />
+        ) : (
           <Box
             sx={{
+              backgroundColor: 'rgba(255, 255, 255, 0.03)',
+              borderRadius: '24px',
+              padding: '48px',
+              width: '480px',
               display: 'flex',
-              gap: '16px',
-              mb: 4
+              flexDirection: 'column',
+              alignItems: 'center',
+              textAlign: 'center',
+              backdropFilter: 'blur(12px)',
+              border: '1px solid rgba(255, 255, 255, 0.05)',
+              boxShadow: '0 8px 32px rgba(0, 0, 0, 0.2)',
             }}
           >
-            <VideocamIcon sx={{ color: 'rgba(255, 255, 255, 0.5)' }} />
-            <ComputerIcon sx={{ color: 'rgba(255, 255, 255, 0.5)' }} />
-            <Mic sx={{ color: 'rgba(255, 255, 255, 0.5)' }} />
-          </Box>
+            <Typography
+              variant="h1"
+              sx={{
+                fontSize: '2.5rem',
+                fontWeight: 800,
+                background: `linear-gradient(45deg, #6366f1, #8b5cf6)`,
+                WebkitBackgroundClip: 'text',
+                WebkitTextFillColor: 'transparent',
+                mb: 2
+              }}
+            >
+              nochat.io
+            </Typography>
+            
+            <Typography
+              variant="body1"
+              sx={{
+                color: 'rgba(255, 255, 255, 0.7)',
+                mb: 4,
+                maxWidth: '320px'
+              }}
+            >
+              Zero-hassle, zero-traces video meetings—secured by blockchain and P2P technology.
+            </Typography>
 
-          <Button
-            onClick={handleGetStarted}
-            variant="contained"
-            sx={{
-              textTransform: 'none',
-              py: 2,
-              px: 6,
-              borderRadius: '12px',
-              fontSize: '1.1rem',
-              fontWeight: 600,
-              background: 'linear-gradient(45deg, #6366f1, #8b5cf6)',
-              '&:hover': {
-                background: 'linear-gradient(45deg, #4f46e5, #7c3aed)',
-              }
-            }}
-          >
-            Start a Call
-          </Button>
-        </Box>
+            <Box
+              sx={{
+                display: 'flex',
+                gap: '16px',
+                mb: 4
+              }}
+            >
+              <VideocamIcon sx={{ color: 'rgba(255, 255, 255, 0.5)' }} />
+              <ComputerIcon sx={{ color: 'rgba(255, 255, 255, 0.5)' }} />
+              <Mic sx={{ color: 'rgba(255, 255, 255, 0.5)' }} />
+            </Box>
+
+            <Button
+              onClick={handleGetStarted}
+              variant="contained"
+              sx={{
+                textTransform: 'none',
+                py: 2,
+                px: 6,
+                borderRadius: '12px',
+                fontSize: '1.1rem',
+                fontWeight: 600,
+                background: 'linear-gradient(45deg, #6366f1, #8b5cf6)',
+                '&:hover': {
+                  background: 'linear-gradient(45deg, #4f46e5, #7c3aed)',
+                }
+              }}
+            >
+              Start a Call
+            </Button>
+          </Box>
+        )}
       </Box>
     </Box>
   );

@@ -101,10 +101,11 @@ function AppBar() {
 
   const handleWalletSignIn = async (address: string, name: string) => {
     try {
-      const res = await fetch(`https://nochat.io/api/users/check-wallet?wallet=${address}`);
-      const data = await res.json();
+      // First check if the wallet exists
+      const checkRes = await fetch(`https://nochat.io/api/users/check-wallet?wallet=${address}`);
+      const checkData = await checkRes.json();
       
-      if (data.exists) {
+      if (checkData.exists) {
         // Get existing user
         const userRes = await fetch(`https://nochat.io/api/users/by-wallet?wallet=${address}`);
         const userData = await userRes.json();
@@ -121,6 +122,8 @@ function AppBar() {
         });
         
         if (!signupRes.ok) {
+          const errorText = await signupRes.text();
+          console.error('Signup response:', errorText);
           throw new Error('Wallet signup failed');
         }
 
