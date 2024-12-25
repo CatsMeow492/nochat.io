@@ -1,0 +1,44 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: nochat-contacts
+  namespace: nochat
+spec:
+  ports:
+  - port: 8082
+    targetPort: 8082
+  selector:
+    app: nochat-contacts
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nochat-contacts
+  namespace: nochat
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nochat-contacts
+  template:
+    metadata:
+      labels:
+        app: nochat-contacts
+    spec:
+      containers:
+      - name: nochat-contacts
+        image: ${AWS_ACCOUNT}.dkr.ecr.us-east-1.amazonaws.com/nochat-contacts:latest
+        ports:
+        - containerPort: 8082
+        env:
+        - name: DB_HOST
+          value: "postgres"
+        - name: DB_NAME
+          value: "nochat"
+        - name: DB_USER
+          value: "postgres"
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: postgres-secret
+              key: password 

@@ -89,7 +89,7 @@ const Splash: React.FC = () => {
               maxWidth: '320px'
             }}
           >
-            Zero-hassle, zero-traces video meetings—secure by design.
+            Zero-hassle, zero-traces video meetings—secured by blockchain and P2P technology.
           </Typography>
 
           <Box

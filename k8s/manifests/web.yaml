@@ -15,7 +15,8 @@ spec:
     spec:
       containers:
       - name: web
-        image: 500532294210.dkr.ecr.us-east-1.amazonaws.com/nochat-web:0.0.1
+        image: 500532294210.dkr.ecr.us-east-1.amazonaws.com/nochat-web:latest
+        imagePullPolicy: Always
         ports:
         - containerPort: 80
         volumeMounts:

@@ -237,7 +237,7 @@ const CallConfigurations: React.FC = () => {
                     payload: CallIntent.Start,
                   })
                 }
-                label="Start Call"
+                label="Start Lobby"
                 color="primary"
                 variant={
                   state.callIntent === CallIntent.Start ? "filled" : "outlined"
@@ -255,7 +255,7 @@ const CallConfigurations: React.FC = () => {
                     payload: CallIntent.Join,
                   })
                 }
-                label="Join Call"
+                label="Join Lobby"
                 color="primary"
                 variant={
                   state.callIntent === CallIntent.Join ? "filled" : "outlined"

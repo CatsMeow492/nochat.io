@@ -769,6 +769,8 @@ const CallView = () => {
         bgcolor: '#18181A',
         display: 'flex',
         flexDirection: 'column',
+        position: 'relative',
+        overflow: 'hidden',
       }}
     >
       {/* Lobby Overlay - Only show when meeting hasn't started */}
@@ -795,8 +797,7 @@ const CallView = () => {
         />
       )}
 
-      
-
+      {/* Main video grid container - add max height */}
       <Box
         sx={{
           flex: 1,
@@ -805,6 +806,8 @@ const CallView = () => {
           alignItems: 'center',
           padding: 3,
           background: 'rgba(8, 8, 12, 0.95)',
+          maxHeight: 'calc(100vh - 100px)',
+          overflow: 'auto',
         }}
       >
         <Box sx={{ width: '100%', height: '100%', position: 'relative' }}>
@@ -886,18 +889,12 @@ const CallView = () => {
           {localStream && (
             <Box
               sx={{
-                position: 'absolute',
-                bottom: 24,
+                position: 'fixed',
+                bottom: 100,
                 right: 24,
                 width: '240px',
                 height: '180px',
-                borderRadius: '12px',
-                overflow: 'hidden',
-                border: '1px solid rgba(255, 255, 255, 0.05)',
-                background: 'rgba(255, 255, 255, 0.02)',
-                backdropFilter: 'blur(12px)',
-                boxShadow: '0 8px 32px rgba(0, 0, 0, 0.2)',
-                zIndex: 10
+                zIndex: 10,
               }}
             >
               <video
@@ -920,11 +917,17 @@ const CallView = () => {
         </Box>
       </Box>
 
+      {/* Controls - ensure they stay at bottom */}
       <Box 
         sx={{ 
+          position: 'fixed',
+          bottom: 0,
+          left: 0,
+          right: 0,
           padding: 3,
           background: 'rgba(8, 8, 12, 0.95)',
           borderTop: '1px solid rgba(255, 255, 255, 0.05)',
+          zIndex: 10,
         }}
       >
         <Stack direction="row" justifyContent="center" spacing={3}>

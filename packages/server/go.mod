@@ -11,6 +11,7 @@ require (
 
 require (
 	github.com/golang/mock v1.6.0 // indirect
+	github.com/lib/pq v1.10.9 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	golang.org/x/net v0.23.0 // indirect
 )

@@ -30,6 +30,48 @@ spec:
   - host: nochat.io
     http:
       paths:
+      - path: /api/users/check-wallet
+        pathType: Exact
+        backend:
+          service:
+            name: nochat-users
+            port:
+              number: 8083
+      - path: /api/users/by-wallet
+        pathType: Exact
+        backend:
+          service:
+            name: nochat-users
+            port:
+              number: 8083
+      - path: /api/users/check-email
+        pathType: Exact
+        backend:
+          service:
+            name: nochat-users
+            port:
+              number: 8083
+      - path: /api/users/by-email
+        pathType: Exact
+        backend:
+          service:
+            name: nochat-users
+            port:
+              number: 8083
+      - path: /api/users/signup
+        pathType: Exact
+        backend:
+          service:
+            name: nochat-users
+            port:
+              number: 8083
+      - path: /api/users
+        pathType: Prefix
+        backend:
+          service:
+            name: nochat-users
+            port:
+              number: 8083
       - path: /ws
         pathType: Exact
         backend:
@@ -51,6 +93,13 @@ spec:
             name: nochat-ice
             port:
               number: 8081
+      - path: /api/contacts
+        pathType: Prefix
+        backend:
+          service:
+            name: nochat-contacts
+            port:
+              number: 8082
       - path: /
         pathType: Prefix
         backend:
