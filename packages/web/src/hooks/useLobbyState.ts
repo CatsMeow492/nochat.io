@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { subscribeToMessages } from '../services/websocket';
+import websocketService from '../services/websocket';
 
 interface UseLobbyStateProps {
   roomId: string | undefined;
@@ -35,8 +35,12 @@ export const useLobbyState = ({ roomId, userId, initialIsInitiator }: UseLobbySt
       }
     };
 
-    const unsubscribe = subscribeToMessages(handleMessage);
-    return () => unsubscribe();
+    const unsubscribe = websocketService.subscribe('message', handleMessage);
+    return () => {
+      if (unsubscribe) {
+        unsubscribe();
+      }
+    };
   }, [roomId]);
 
   return {

@@ -1,4 +1,12 @@
-import { ChatMessage, MessageHandlerDependencies, WebSocketMessage, AnswerContent, IceCandidateContent, OfferContent, PeerConnection } from '../types/chat';
+import { ChatMessage, MessageHandlerDependencies, AnswerContent, IceCandidateContent, OfferContent, PeerConnection } from '../types/chat';
+
+// Add to the WebSocketMessage type union
+interface WebSocketMessage {
+  type: 'startMeeting' | 'createOffer' | 'offer' | 'answer' | 'iceCandidate' | 
+        'userID' | 'initiatorStatus' | 'chatMessage' | 'userList' | 'incoming_call';
+  content: any;
+  room_id?: string;
+}
 
 const iceCandidateQueue: Map<string, RTCIceCandidate[]> = new Map();
 const offerQueue: Map<string, RTCSessionDescription> = new Map();
@@ -983,8 +991,38 @@ export const createMessageHandler = (deps: MessageHandlerDependencies) => {
                 }
                 break;
 
+            case 'incoming_call':
+                const { from, fromName, roomId } = message.content;
+                logMsg('CALL', `Incoming call from ${fromName || from} for room ${roomId}`);
+                
+                try {
+                    // Request notification permission if needed
+                    if (Notification.permission === 'default') {
+                        await Notification.requestPermission();
+                    }
+
+                    if (Notification.permission === 'granted') {
+                        const notification = new Notification('Incoming Call', {
+                            body: `${fromName || from} is calling you`,
+                            icon: '/favicon.ico',
+                            requireInteraction: true,
+                        });
+
+                        notification.onclick = () => {
+                            window.focus();
+                            // Store that we're not the initiator
+                            localStorage.setItem('isInitiator', 'false');
+                            // Navigate to the call page
+                            window.location.href = `/call/${roomId}`;
+                        };
+                    }
+                } catch (err) {
+                    logMsg('ERROR', `Error showing notification: ${err}`);
+                }
+                break;
+
             default:
-                console.log(`Unhandled message type: ${message.type}`);
+                logMsg('MSG', `Unhandled message type: ${message.type}`);
         }
     };
 }; 

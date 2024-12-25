@@ -4,7 +4,7 @@ import { getWsUrl } from '../utils/url';
 export const BASE_URL = process.env.REACT_APP_API_URL || 'https://nochat.io';
 
 // WebSocket URL for real-time connections
-export const SIGNALING_SERVICE_URL = process.env.REACT_APP_SIGNALING_SERVICE_URL || 'https://nochat.io';
+export const SIGNALING_SERVICE_URL = process.env.REACT_APP_WS_URL || 'wss://nochat.io/ws';
 
 // Debug logs
 if (process.env.NODE_ENV === 'development') {
@@ -73,16 +73,17 @@ export const validateTurnConfig = async () => {
 
 export const VERSION = '2024.0.3';
 
-// Use the ALB URL for WebSocket connections
-const WS_URL = process.env.REACT_APP_WS_URL || 'wss://k8s-secp-secpsign-8beb446f8f-1006806846.us-east-2.elb.amazonaws.com/ws';
-
-export const getWebSocketURL = (roomId: string, userId?: string) => {
-    // Convert http/https to ws/wss
-    const wsBase = SIGNALING_SERVICE_URL.replace('http:', 'ws:').replace('https:', 'wss:');
-    const url = new URL(`${wsBase}/ws`);
-    url.searchParams.append('room_id', roomId);
-    if (userId) {
-        url.searchParams.append('user_id', userId);
-    }
-    return url.toString();
+// Get WebSocket URL for different connection types
+export const getWebSocketURL = (options: { roomId?: string; userId?: string }) => {
+  const wsBase = SIGNALING_SERVICE_URL;
+  const url = new URL(wsBase);
+  
+  if (options.roomId) {
+    url.searchParams.append('room_id', options.roomId);
+  }
+  if (options.userId) {
+    url.searchParams.append('user_id', options.userId);
+  }
+  
+  return url.toString();
 };

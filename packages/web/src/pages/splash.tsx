@@ -5,12 +5,20 @@ import { Box, Typography, Button } from '@mui/material';
 import ThreeBackground from '../components/Background/webgl_background';
 import AppBar from '../components/appbar';
 import ContactsList from '../components/ContactsList';
+import websocketService from '../services/websocket';
 
 interface User {
   id: string;
   email?: string;
   name: string;
   wallet_address?: string;
+}
+
+interface CallData {
+  from: string;
+  fromName?: string;
+  roomId: string;
+  to?: string;
 }
 
 /**
@@ -32,12 +40,19 @@ const Splash: React.FC = () => {
     if (userId) {
       fetch(`https://nochat.io/api/users/${userId}`)
         .then(res => res.json())
-        .then(data => setUser(data))
+        .then(data => {
+          setUser(data);
+          // Subscribe to incoming call notifications
+          websocketService.subscribe('incoming_call', (data: CallData) => {
+            console.log('Incoming call from:', data.fromName || data.from);
+          });
+        })
         .catch(err => {
           console.error('Error fetching user:', err);
           localStorage.removeItem('userId');
         });
     }
+
     return () => {
       setShowBackground(false);
     };

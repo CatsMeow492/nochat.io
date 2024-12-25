@@ -3,6 +3,7 @@ import { VideoCall, PersonAdd } from '@mui/icons-material';
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import AddContactDialog from './AddContactDialog';
+import websocketService from '../services/websocket';
 
 interface Contact {
   id: string;
@@ -91,11 +92,25 @@ function ContactsList({ userEmail, userWallet, userId }: ContactsListProps) {
     }
   };
 
-  const handleStartCall = (contactId: string) => {
-    // Generate a unique room ID based on user IDs (sorted to ensure consistency)
-    const participants = [userId, contactId].sort();
-    const roomId = `${participants[0]}-${participants[1]}`;
-    navigate(`/room/${roomId}`);
+  const handleStartCall = async (contactId: string) => {
+    try {
+      const participants = [userId, contactId].sort();
+      const roomId = `${participants[0]}-${participants[1]}`;
+
+      // Send incoming call notification using the new websocketService
+      websocketService.send('incoming_call', {
+        to: contactId,
+        roomId,
+        from: userId,
+        fromName: userEmail || userWallet,
+      });
+
+      navigate(`/call/${roomId}`);
+      localStorage.setItem('isInitiator', 'true');
+    } catch (err) {
+      console.error('Error starting call:', err);
+      setError('Failed to start call');
+    }
   };
 
   const handleStartNewCall = () => {
