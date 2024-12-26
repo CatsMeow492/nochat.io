@@ -1,0 +1,48 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nochat-signaling
+  namespace: nochat
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nochat-signaling
+  template:
+    metadata:
+      labels:
+        app: nochat-signaling
+    spec:
+      containers:
+      - name: nochat-signaling
+        image: 500532294210.dkr.ecr.us-east-1.amazonaws.com/nochat-signaling:latest
+        ports:
+        - containerPort: 8080
+          name: http-ws
+        env:
+        - name: REDIS_ADDR
+          value: "redis-master.nochat.svc.cluster.local:6379"
+        - name: REDIS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: redis
+              key: redis-password
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 15
+          periodSeconds: 20
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m" 

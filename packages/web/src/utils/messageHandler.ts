@@ -29,6 +29,15 @@ const ICE_RESTART_COOLDOWN = 1000; // 1 second
 const ICE_RETRY_MAX = 3;
 const ICE_RETRY_DELAY = 2000; // 2 seconds
 
+// Add at the top with other utility functions
+const safeSetStorage = (key: string, value: string): void => {
+  try {
+    localStorage.setItem(key, value);
+  } catch (error) {
+    console.warn('localStorage write failed:', error);
+  }
+};
+
 function triggerIceRestart() {
   const now = Date.now();
   if (now - lastIceRestart < ICE_RESTART_COOLDOWN) {
@@ -1011,7 +1020,7 @@ export const createMessageHandler = (deps: MessageHandlerDependencies) => {
                         notification.onclick = () => {
                             window.focus();
                             // Store that we're not the initiator
-                            localStorage.setItem('isInitiator', 'false');
+                            safeSetStorage('isInitiator', 'false');
                             // Navigate to the call page
                             window.location.href = `/call/${roomId}`;
                         };

@@ -21,6 +21,8 @@ func (h *MessageHandler) HandleMessage(msg models.Message, client *models.Client
 	log.Printf("[%s:%s] from:%s", msg.Type, room.ID, client.UserID)
 
 	switch msg.Type {
+	case "joinRoom":
+		h.handleJoinRoom(msg, client, room)
 	case "startMeeting":
 		h.handleStartMeeting(msg, client, room)
 	case "offer":
@@ -441,15 +443,16 @@ func (h *MessageHandler) BroadcastUserCount(room *models.Room) {
 
 	messageBytes, err := json.Marshal(message)
 	if err != nil {
-		log.Printf("Error marshaling user count message: %v", err)
+		log.Printf("[ERROR] Error marshaling user count message: %v", err)
 		return
 	}
 
+	log.Printf("[DEBUG] Broadcasting userCount message: %s", string(messageBytes))
 	room.Broadcast(messageBytes, nil)
-	log.Printf("Broadcasted user count %d for room %s", count, room.ID)
 }
 
 func (h *MessageHandler) SendInitialRoomState(client *models.Client, room *models.Room) {
+	log.Printf("[DEBUG] Preparing initial room state for client %s in room %s", client.UserID, room.ID)
 	userCountMsg := models.Message{
 		Type:    "userCount",
 		RoomID:  room.ID,
@@ -458,15 +461,33 @@ func (h *MessageHandler) SendInitialRoomState(client *models.Client, room *model
 
 	messageBytes, err := json.Marshal(userCountMsg)
 	if err != nil {
-		log.Printf("Error marshaling initial user count message: %v", err)
+		log.Printf("[ERROR] Error marshaling initial user count message: %v", err)
 		return
+	}
+
+	log.Printf("[DEBUG] Sending initial userCount message: %s", string(messageBytes))
+
+	// Send initiator status
+	isInitiator := room.Initiator == client
+	log.Printf("[DEBUG] Sending initiatorStatus message to client %s (isInitiator: %v)", client.UserID, isInitiator)
+	initiatorMsg := models.MarshalMessage("initiatorStatus", room.ID, isInitiator)
+
+	log.Printf("[DEBUG] Attempting to send to client channel for %s", client.UserID)
+	select {
+	case client.Send <- initiatorMsg:
+		log.Printf("[DEBUG] Successfully queued initiatorStatus message for client %s", client.UserID)
+	default:
+		log.Printf("[ERROR] Failed to queue initiatorStatus message for client %s - channel full", client.UserID)
 	}
 
 	client.Send <- messageBytes
 }
 
 func (h *MessageHandler) BroadcastUserList(room *models.Room) {
+	log.Printf("[DEBUG] Broadcasting user list for room %s", room.ID)
 	users := room.GetUserList()
+	log.Printf("[DEBUG] Current users in room: %v", users)
+
 	message := models.Message{
 		Type:   "userList",
 		RoomID: room.ID,
@@ -477,12 +498,12 @@ func (h *MessageHandler) BroadcastUserList(room *models.Room) {
 
 	messageBytes, err := json.Marshal(message)
 	if err != nil {
-		log.Printf("Error marshaling user list message: %v", err)
+		log.Printf("[ERROR] Error marshaling user list message: %v", err)
 		return
 	}
 
+	log.Printf("[DEBUG] Broadcasting userList message: %s", string(messageBytes))
 	room.Broadcast(messageBytes, nil)
-	log.Printf("Broadcasted user list for room %s: %v", room.ID, users)
 }
 
 func (h *MessageHandler) BroadcastToRoom(room *models.Room, message []byte) {
@@ -501,4 +522,23 @@ func getKeys(m map[string]interface{}) []string {
 		keys = append(keys, k)
 	}
 	return keys
+}
+
+func (h *MessageHandler) handleJoinRoom(msg models.Message, client *models.Client, room *models.Room) {
+	log.Printf("[JOIN] Client %s joining room %s", client.UserID, room.ID)
+
+	// Send initial state to the joining client with logging
+	userIDMsg := models.MarshalMessage("userID", room.ID, client.UserID)
+	log.Printf("[DEBUG] Sending userID message: %s", string(userIDMsg))
+	client.Send <- userIDMsg
+
+	isInitiator := room.Initiator == client
+	initiatorMsg := models.MarshalMessage("initiatorStatus", room.ID, isInitiator)
+	log.Printf("[DEBUG] Sending initiatorStatus message: %s", string(initiatorMsg))
+	client.Send <- initiatorMsg
+
+	// Broadcast updated room state with logging
+	log.Printf("[DEBUG] Broadcasting room state updates")
+	h.BroadcastUserCount(room)
+	h.BroadcastUserList(room)
 }

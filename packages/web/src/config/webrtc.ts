@@ -4,7 +4,7 @@ import { getWsUrl } from '../utils/url';
 export const BASE_URL = process.env.REACT_APP_API_URL || 'https://nochat.io';
 
 // WebSocket URL for real-time connections
-export const SIGNALING_SERVICE_URL = process.env.REACT_APP_WS_URL || 'wss://nochat.io/ws';
+export const SIGNALING_SERVICE_URL = process.env.REACT_APP_WS_URL || 'wss://nochat.io';
 
 // Debug logs
 if (process.env.NODE_ENV === 'development') {
@@ -76,7 +76,7 @@ export const VERSION = '2024.0.3';
 // Get WebSocket URL for different connection types
 export const getWebSocketURL = (options: { roomId?: string; userId?: string }) => {
   const wsBase = SIGNALING_SERVICE_URL;
-  const url = new URL(wsBase);
+  const url = new URL('/ws/', wsBase);
   
   if (options.roomId) {
     url.searchParams.append('room_id', options.roomId);
@@ -84,6 +84,10 @@ export const getWebSocketURL = (options: { roomId?: string; userId?: string }) =
   if (options.userId) {
     url.searchParams.append('user_id', options.userId);
   }
+  
+  // Add protocol version and transport parameters
+  url.searchParams.append('EIO', '4');
+  url.searchParams.append('transport', 'websocket');
   
   return url.toString();
 };

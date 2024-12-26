@@ -16,29 +16,47 @@ export const useLobbyState = ({ roomId, userId, initialIsInitiator }: UseLobbySt
   useEffect(() => {
     if (!roomId) return;
 
-    const handleMessage = (message: any) => {
-        if (message.type === 'userList' || message.type === 'userCount' || message.type === 'initiatorStatus' || message.type === 'startMeeting') {
-            console.log('Lobby handling message:', message);
-        }
-      
-      if (message.type === 'userList' && message.content) {
-        const participantList = message.content.users || [];
-        setParticipants(participantList);
-        console.log('Updated participants:', participantList);
-      } else if (message.type === 'userCount') {
-        setUserCount(parseInt(message.content));
-      } else if (message.type === 'initiatorStatus') {
-        console.log('Setting initiator status:', message.content);
-        setIsInitiator(message.content);
-      } else if (message.type === 'startMeeting') {
-        setMeetingStarted(true);
+    // Send joinRoom message when component mounts
+    websocketService.send('joinRoom', { roomId });
+
+    const handleMessage = (type: string, content: any) => {
+      switch (type) {
+        case 'userList':
+          if (content && content.users) {
+            setParticipants(content.users);
+          }
+          break;
+        case 'userCount':
+          const count = parseInt(content, 10);
+          if (!isNaN(count)) {
+            setUserCount(count);
+          }
+          break;
+        case 'initiatorStatus':
+          console.log('[useLobbyState] Received initiatorStatus:', content);
+          const newIsInitiator = content === true || content === 'true';
+          console.log('[useLobbyState] Setting isInitiator to:', newIsInitiator);
+          setIsInitiator(newIsInitiator);
+          break;
+        case 'startMeeting':
+          setMeetingStarted(true);
+          break;
       }
     };
 
-    const unsubscribe = websocketService.subscribe('message', handleMessage);
+    // Subscribe to relevant message types
+    const unsubscribers = [
+      websocketService.subscribe('userList', (content) => handleMessage('userList', content)),
+      websocketService.subscribe('userCount', (content) => handleMessage('userCount', content)),
+      websocketService.subscribe('initiatorStatus', (content) => handleMessage('initiatorStatus', content)),
+      websocketService.subscribe('startMeeting', (content) => handleMessage('startMeeting', content))
+    ];
+
+    // Cleanup subscriptions when unmounting
     return () => {
-      if (unsubscribe) {
-        unsubscribe();
+      unsubscribers.forEach(unsubscribe => unsubscribe());
+      if (roomId) {
+        websocketService.send('leaveRoom', { roomId });
       }
     };
   }, [roomId]);
@@ -46,7 +64,7 @@ export const useLobbyState = ({ roomId, userId, initialIsInitiator }: UseLobbySt
   return {
     participants,
     userCount,
-    userId,
+    isInitiator,
     meetingStarted
   };
 };

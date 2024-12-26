@@ -38,13 +38,16 @@ class WebSocketService {
       socket.onmessage = async (event) => {
         try {
           const message = JSON.parse(event.data);
-          console.log('[WebSocketService] Received message type:', message.type);
+          console.log('[WebSocketService] Received message:', {
+            type: message.type,
+            content: message.content
+          });
           
-          if (message.type === 'incoming_call') {
-            console.log('[WebSocketService] Handling incoming call');
-            await this.handleIncomingCall(message.content);
-          }
+          // Notify subscribers of the specific message type
           this.notifySubscribers(message.type, message.content);
+          
+          // Also notify 'message' subscribers of all messages
+          this.notifySubscribers('message', message);
         } catch (error) {
           console.error('[WebSocketService] Error handling message:', error);
         }

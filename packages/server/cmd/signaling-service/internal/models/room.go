@@ -117,6 +117,13 @@ func (r *Room) AddClient(conn *websocket.Conn, userID string) *Client {
 	r.Mu.Lock()
 	defer r.Mu.Unlock()
 
+	// Check if client already exists
+	if existingClient, exists := r.Clients[userID]; exists {
+		log.Printf("[DEBUG] Client %s already exists in room %s, updating connection", userID, r.ID)
+		existingClient.Conn = conn
+		return existingClient
+	}
+
 	client := &Client{
 		UserID: userID,
 		Conn:   conn,
@@ -126,11 +133,12 @@ func (r *Room) AddClient(conn *websocket.Conn, userID string) *Client {
 	}
 
 	r.Clients[userID] = client
-	log.Printf("Added client %s to room %s. Total clients: %d", userID, r.ID, len(r.Clients))
+	log.Printf("[DEBUG] Added new client %s to room %s. Total clients: %d", userID, r.ID, len(r.Clients))
 
-	if r.Initiator == nil {
+	// Set initiator if this is the first client
+	if len(r.Clients) == 1 {
 		r.Initiator = client
-		log.Printf("Set client %s as initiator for room %s", userID, r.ID)
+		log.Printf("[DEBUG] Set client %s as initiator for room %s (first client)", userID, r.ID)
 	}
 
 	return client

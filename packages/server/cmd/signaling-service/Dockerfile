@@ -1,5 +1,5 @@
 # Use the official Go image as a base
-FROM golang:1.20 as builder
+FROM --platform=linux/amd64 golang:1.20 as builder
 
 # Set the working directory
 WORKDIR /app
@@ -13,11 +13,15 @@ RUN go mod download
 # Copy the source code
 COPY . .
 
-# Build the signaling service
+# Build the signaling service for linux/amd64
+ENV GOOS=linux GOARCH=amd64 CGO_ENABLED=0
 RUN go build -o signaling-service ./cmd/signaling-service/cmd/main.go
 
 # Use a smaller image for the final build
-FROM alpine:latest
+FROM --platform=linux/amd64 alpine:latest
+
+# Install necessary runtime dependencies
+RUN apk add --no-cache ca-certificates libc6-compat
 
 # Set the working directory
 WORKDIR /app

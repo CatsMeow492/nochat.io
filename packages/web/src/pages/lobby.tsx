@@ -28,7 +28,7 @@ import { User } from '../hooks/useRoomList';
 import { useLobbyState } from '../hooks/useLobbyState';
 import { validateTurnConfig } from '../config/webrtc';
 import { RTCConfiguration as config } from '../config/webrtc';
-
+import websocketService from '../services/websocket';
 
 interface LobbyOverlayProps {
   isInitiator: boolean;
@@ -36,7 +36,6 @@ interface LobbyOverlayProps {
   onStartMeeting: () => void;
   participants?: Array<User>;
   userId: string | null;
-
   onReadyChange: (ready: boolean) => void;
   roomId?: string;
   onCameraToggle?: (enabled: boolean) => void;
@@ -65,14 +64,11 @@ const LobbyOverlay: React.FC<LobbyOverlayProps> = ({
   initialMicrophoneEnabled = true,
   mediaReady = false,
 }) => {
-  const { participants, userCount } = useLobbyState({
+  const { participants, userCount, isInitiator } = useLobbyState({
     roomId,
     userId,
     initialIsInitiator: propIsInitiator,
   });
-
-  // Use the prop instead of the hook value
-  const isInitiator = propIsInitiator;
 
   // Add effect to log state changes
   useEffect(() => {
@@ -123,6 +119,13 @@ const LobbyOverlay: React.FC<LobbyOverlayProps> = ({
   useEffect(() => {
     validateTurnConfig().then(setTurnConfigValid);
   }, []);
+
+  const handleStartMeeting = () => {
+    if (canStartMeeting) {
+      websocketService.send('startMeeting', { roomId });
+      onStartMeeting();
+    }
+  };
 
   if (!meetingStarted) {
     return (
@@ -347,7 +350,7 @@ const LobbyOverlay: React.FC<LobbyOverlayProps> = ({
                   variant="contained"
                   size="large"
                   disableElevation
-                  onClick={onStartMeeting}
+                  onClick={handleStartMeeting}
                   disabled={!canStartMeeting}
                   sx={{
                     minWidth: 200,

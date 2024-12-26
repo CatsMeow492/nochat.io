@@ -29,6 +29,24 @@ function WrappedApp() {
 }
 
 function App() {
+  // Safe localStorage access utility
+  const safeGetStorage = (key: string): string | null => {
+    try {
+      return localStorage.getItem(key);
+    } catch (error) {
+      console.warn('localStorage access failed:', error);
+      return null;
+    }
+  };
+
+  const safeSetStorage = (key: string, value: string): void => {
+    try {
+      localStorage.setItem(key, value);
+    } catch (error) {
+      console.warn('localStorage write failed:', error);
+    }
+  };
+
   // Create message handler instance
   const messageHandler = useMemo(() => createMessageHandler({
     log: (message: string) => console.log(message),
@@ -36,7 +54,7 @@ function App() {
       websocketService.send(type, content);
     },
     getState: () => ({
-      userId: localStorage.getItem('userId'),
+      userId: safeGetStorage('userId'),
       isInitiator: false,
       isPeerConnectionReady: false,
       isNegotiating: false,
@@ -55,7 +73,7 @@ function App() {
     } as WebRTCState),
     setState: {
       setUserId: (value: string | null) => {
-        if (value) localStorage.setItem('userId', value);
+        if (value) safeSetStorage('userId', value);
       },
       setIsInitiator: (value: boolean) => {},
       setMeetingStarted: (value: boolean) => {},
@@ -83,7 +101,7 @@ function App() {
 
   // Establish WebSocket connection when user is logged in
   const connectWebSocket = useCallback(() => {
-    const userId = localStorage.getItem('userId');
+    const userId = safeGetStorage('userId');
     if (!userId) {
       console.log('[App] No userId found, skipping WebSocket connection');
       return;
@@ -93,17 +111,44 @@ function App() {
     const wsUrl = getWebSocketURL({ userId });
     console.log('[App] WebSocket URL:', wsUrl);
 
+    // Create WebSocket without strict protocol requirement
+    let connectionTimeout: NodeJS.Timeout;
     const socket = new WebSocket(wsUrl);
     
+    // Set connection timeout
+    connectionTimeout = setTimeout(() => {
+      if (socket.readyState !== WebSocket.OPEN) {
+        console.error('[App] WebSocket connection timeout');
+        socket.close();
+      }
+    }, 5000);
+
     // Set up WebSocket event handlers
     socket.onopen = () => {
+      clearTimeout(connectionTimeout);
       console.log('[App] WebSocket connection established');
-      websocketService.setSocket(socket);
+      
+      // Send initial ping to verify connection
+      try {
+        socket.send(JSON.stringify({ type: 'ping' }));
+        websocketService.setSocket(socket);
+      } catch (error) {
+        console.error('[App] Failed to send initial ping:', error);
+      }
     };
 
-    socket.onclose = () => {
-      console.log('[App] WebSocket disconnected, attempting to reconnect in 3s...');
-      // Attempt to reconnect after a delay
+    socket.onclose = (event) => {
+      clearTimeout(connectionTimeout);
+      console.log('[App] WebSocket disconnected with code:', event.code, 'reason:', event.reason);
+      
+      // Don't reconnect if closed normally or if user logged out
+      if (event.code === 1000 || !safeGetStorage('userId')) {
+        console.log('[App] Clean disconnection or user logged out, not reconnecting');
+        return;
+      }
+
+      console.log('[App] Attempting to reconnect in 3s...');
+      // Attempt to reconnect after a delay with exponential backoff
       setTimeout(connectWebSocket, 3000);
     };
 

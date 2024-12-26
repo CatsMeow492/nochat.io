@@ -259,6 +259,19 @@ const CallView = () => {
     }
   };
 
+  // Handle room join/leave
+  useEffect(() => {
+    if (roomId && websocketService) {
+      // Explicitly send join room message
+      websocketService.send('joinRoom', { roomId });
+
+      // Cleanup when leaving
+      return () => {
+        websocketService.send('leaveRoom', { roomId });
+      };
+    }
+  }, [roomId]);
+
   // Render video grid and controls
   return (
     <Box
