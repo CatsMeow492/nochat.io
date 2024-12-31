@@ -51,6 +51,7 @@ export interface MessageHandlerDependencies {
   renegotiatePeerConnection: (peerId: string) => void;
   activePeers: Set<string>;
   checkPeerConnections: (peerIds: string[]) => void;
+  iceServers: RTCIceServer[];
 }
 
 export interface WebSocketMessage {
@@ -87,16 +88,15 @@ export interface OfferContent {
   fromPeerID?: string;
   targetPeerId?: string;
   targetPeerID?: string;
+  fromPeer?: string;
 }
 
 export interface IceCandidateContent {
-  candidate: RTCIceCandidate;
-  from?: string;      // Add this
-  target?: string;    // Add this
-  targetPeerId?: string;
-  targetPeerID?: string;
-  fromPeerId?: string;
-  fromPeerID?: string;
+    candidate: RTCIceCandidate;
+    fromPeerId?: string;    // Preferred
+    fromPeerID?: string;    // Legacy support
+    targetPeerId?: string;  // Preferred
+    targetPeerID?: string;  // Legacy support
 }
 
 export interface PeerTrackStatus {
@@ -104,11 +104,56 @@ export interface PeerTrackStatus {
     video: boolean;
 }
 
+export interface TrackReadyState {
+    audio?: {
+        track: MediaStreamTrack;
+        ready: boolean;
+        timestamp: number;
+    };
+    video?: {
+        track: MediaStreamTrack;
+        ready: boolean;
+        timestamp: number;
+    };
+}
+
+export enum PeerConnectionState {
+    NEW = 'new',                    // Initial state
+    CONNECTING = 'connecting',      // Offer/Answer exchange started
+    CONNECTED = 'connected',        // ICE connection established
+    READY = 'ready',               // Media tracks received and ready
+    FAILED = 'failed',             // Connection failed
+    CLOSED = 'closed',             // Connection closed
+    OFFER_RECEIVED = 'offer_received',    // Received offer, waiting for answer
+    ANSWER_RECEIVED = 'answer_received'   // Received answer, ready for ICE
+}
+
 export interface PeerConnection {
     id: string;
     connection: RTCPeerConnection;
+    connectionState: PeerConnectionState;
     trackStatus: PeerTrackStatus;
-    stream?: MediaStream;
-    connected: boolean;
+    trackReadyState: TrackReadyState;
+    stream: MediaStream | null;
     negotiationNeeded: boolean;
+    lastTrackUpdate: number;      // Timestamp of last track update
+    retryCount: number;           // Number of connection retry attempts
+    iceRetryCount: number;        // Number of ICE retry attempts
 }
+
+// Helper function to create a new PeerConnection object with default values
+export const createPeerConnection = (
+    id: string, 
+    connection: RTCPeerConnection
+): PeerConnection => ({
+    id,
+    connection,
+    connectionState: PeerConnectionState.NEW,
+    trackStatus: { audio: false, video: false },
+    trackReadyState: { audio: undefined, video: undefined },
+    stream: null,
+    negotiationNeeded: false,
+    lastTrackUpdate: Date.now(),
+    retryCount: 0,
+    iceRetryCount: 0
+});

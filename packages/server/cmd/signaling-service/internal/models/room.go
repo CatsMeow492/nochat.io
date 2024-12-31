@@ -60,6 +60,13 @@ type SignalingState struct {
 	Timestamp      time.Time
 }
 
+// QueuedICECandidate represents a queued ICE candidate
+type QueuedICECandidate struct {
+	FromPeerID string
+	ToPeerID   string
+	Content    map[string]interface{}
+}
+
 type Room struct {
 	ID                   string                                `json:"id"`
 	Name                 string                                `json:"name"`
@@ -78,6 +85,7 @@ type Room struct {
 	signalingStates      map[string]map[string]*SignalingState // targetPeerID -> fromPeerID -> state
 	queuedAnswers        map[string]map[string][]map[string]interface{}
 	activeConnections    map[string]map[string]bool // fromID -> targetID -> active
+	queuedCandidates     []QueuedICECandidate
 }
 
 func NewRoom(id, name, createdBy string) *Room {
@@ -92,6 +100,7 @@ func NewRoom(id, name, createdBy string) *Room {
 		signalingStates:   make(map[string]map[string]*SignalingState),
 		queuedAnswers:     make(map[string]map[string][]map[string]interface{}),
 		activeConnections: make(map[string]map[string]bool),
+		queuedCandidates:  make([]QueuedICECandidate, 0),
 	}
 }
 
@@ -117,6 +126,13 @@ func (r *Room) AddClient(conn *websocket.Conn, userID string) *Client {
 	r.Mu.Lock()
 	defer r.Mu.Unlock()
 
+	// Check if client already exists
+	if existingClient, exists := r.Clients[userID]; exists {
+		log.Printf("[DEBUG] Client %s already exists in room %s, updating connection", userID, r.ID)
+		existingClient.Conn = conn
+		return existingClient
+	}
+
 	client := &Client{
 		UserID: userID,
 		Conn:   conn,
@@ -126,11 +142,12 @@ func (r *Room) AddClient(conn *websocket.Conn, userID string) *Client {
 	}
 
 	r.Clients[userID] = client
-	log.Printf("Added client %s to room %s. Total clients: %d", userID, r.ID, len(r.Clients))
+	log.Printf("[DEBUG] Added new client %s to room %s. Total clients: %d", userID, r.ID, len(r.Clients))
 
-	if r.Initiator == nil {
+	// Set initiator if this is the first client
+	if len(r.Clients) == 1 {
 		r.Initiator = client
-		log.Printf("Set client %s as initiator for room %s", userID, r.ID)
+		log.Printf("[DEBUG] Set client %s as initiator for room %s (first client)", userID, r.ID)
 	}
 
 	return client
@@ -600,4 +617,36 @@ func (r *Room) GetSignalingStates(userID string) []*SignalingState {
 		}
 	}
 	return states
+}
+
+// QueueICECandidate queues an ICE candidate for later delivery
+func (r *Room) QueueICECandidate(toPeerID, fromPeerID string, content map[string]interface{}) {
+	r.Mu.Lock()
+	defer r.Mu.Unlock()
+
+	r.queuedCandidates = append(r.queuedCandidates, QueuedICECandidate{
+		FromPeerID: fromPeerID,
+		ToPeerID:   toPeerID,
+		Content:    content,
+	})
+}
+
+// GetQueuedCandidates returns and clears all queued candidates for a specific peer pair
+func (r *Room) GetQueuedCandidates(toPeerID, fromPeerID string) []map[string]interface{} {
+	r.Mu.Lock()
+	defer r.Mu.Unlock()
+
+	var candidates []map[string]interface{}
+	var remainingCandidates []QueuedICECandidate
+
+	for _, candidate := range r.queuedCandidates {
+		if candidate.ToPeerID == toPeerID && candidate.FromPeerID == fromPeerID {
+			candidates = append(candidates, candidate.Content)
+		} else {
+			remainingCandidates = append(remainingCandidates, candidate)
+		}
+	}
+
+	r.queuedCandidates = remainingCandidates
+	return candidates
 }

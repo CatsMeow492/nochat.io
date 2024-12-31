@@ -1,9 +1,27 @@
-import { ChatMessage, MessageHandlerDependencies, WebSocketMessage, AnswerContent, IceCandidateContent, OfferContent, PeerConnection } from '../types/chat';
+import { ChatMessage, MessageHandlerDependencies, AnswerContent, IceCandidateContent, OfferContent, PeerConnection, PeerConnectionState, createPeerConnection } from '../types/chat';
+import { useMediaStore } from '../store/mediaStore';
 
-const iceCandidateQueue: Map<string, RTCIceCandidate[]> = new Map();
+// Add to the WebSocketMessage type union
+interface WebSocketMessage {
+  type: 'startMeeting' | 'createOffer' | 'offer' | 'answer' | 'iceCandidate' | 
+        'userID' | 'initiatorStatus' | 'chatMessage' | 'userList' | 'incoming_call';
+  content: any;
+  room_id?: string;
+}
+
+interface IceCandidateQueue {
+  candidates: RTCIceCandidateInit[];
+  hasRemoteDescription: boolean;
+  createdAt: number;              // Timestamp when queue was created
+  lastUpdated: number;            // Timestamp of last candidate added
+  processedCount: number;         // Number of candidates successfully processed
+  connectionState?: RTCIceConnectionState;  // Current ICE connection state
+  gatheringState?: RTCIceGatheringState;   // Current ICE gathering state
+}
+
+const iceCandidateQueues = new Map<string, IceCandidateQueue>();
 const offerQueue: Map<string, RTCSessionDescription> = new Map();
 const recoveryAttempted = new Map<string, boolean>();
-const pendingTracks: Map<string, Set<MediaStreamTrack>> = new Map();
 
 // Add a flag to track if we've received our initiator status
 let hasReceivedInitiatorStatus = false;
@@ -21,30 +39,12 @@ const ICE_RESTART_COOLDOWN = 1000; // 1 second
 const ICE_RETRY_MAX = 3;
 const ICE_RETRY_DELAY = 2000; // 2 seconds
 
-function triggerIceRestart() {
-  const now = Date.now();
-  if (now - lastIceRestart < ICE_RESTART_COOLDOWN) {
-    console.log("[ICE] Skipping restart - too soon");
-    return;
-  }
-  
-  lastIceRestart = now;
-  console.log("[ICE] Triggering ICE restart");
-  // ... existing restart code ...
-}
-
-const processQueuedAnswer = async (pc: PeerConnection, peerId: string, deps: MessageHandlerDependencies) => {
-  const queuedAnswer = deps.getState().offerQueue.get(peerId);
-  if (queuedAnswer && pc.connection.signalingState === 'have-local-offer') {
-    try {
-      await pc.connection.setRemoteDescription(new RTCSessionDescription(queuedAnswer));
-      const newQueue = new Map(deps.getState().offerQueue);
-      newQueue.delete(peerId);
-      deps.setState.setOfferQueue(newQueue);
-      console.log('Successfully processed queued answer for peer:', peerId);
-    } catch (error) {
-      console.error('Error processing queued answer:', error);
-    }
+// Add at the top with other utility functions
+const safeSetStorage = (key: string, value: string): void => {
+  try {
+    localStorage.setItem(key, value);
+  } catch (error) {
+    console.warn('localStorage write failed:', error);
   }
 };
 
@@ -58,14 +58,16 @@ const logMsg = (type: string, msg: string, data?: any) => {
 };
 
 const ensureLocalMedia = async (deps: MessageHandlerDependencies) => {
-    if (!deps.getState().localStream) {
+    const mediaStore = useMediaStore.getState();
+    if (!mediaStore.localStream) {
         logMsg('MEDIA', 'Requesting local media access');
         try {
             const stream = await navigator.mediaDevices.getUserMedia({ 
                 video: true, 
                 audio: true 
             });
-            deps.setState.setLocalStream(stream);
+            mediaStore.setLocalStream(stream);
+            mediaStore.setMediaReady(true);
             logMsg('MEDIA', `Got local stream with ${stream.getTracks().length} tracks`);
             return stream;
         } catch (error) {
@@ -73,361 +75,284 @@ const ensureLocalMedia = async (deps: MessageHandlerDependencies) => {
             throw error;
         }
     }
-    return deps.getState().localStream;
+    return mediaStore.localStream;
+};
+
+const setupPeerConnection = async (peerId: string, deps: MessageHandlerDependencies): Promise<RTCPeerConnection> => {
+    const pc = new RTCPeerConnection({
+        iceServers: deps.iceServers,
+        iceTransportPolicy: 'all',
+        bundlePolicy: 'balanced',
+        iceCandidatePoolSize: 1
+    });
+    
+    const peerConn = createPeerConnection(peerId, pc);
+    deps.peerConnections.set(peerId, peerConn);
+
+    // Add local tracks immediately from MediaStore
+    const mediaStore = useMediaStore.getState();
+    const localStream = mediaStore.localStream;
+    if (localStream) {
+        localStream.getTracks().forEach(track => {
+            pc.addTrack(track, localStream);
+            logMsg('TRACK', `Added ${track.kind} track to peer connection ${peerId}`);
+        });
+    }
+
+    // Handle ICE candidates
+    pc.onicecandidate = (event) => {
+        if (event.candidate) {
+            deps.sendMessage('iceCandidate', {
+                candidate: event.candidate,
+                fromPeerId: deps.getState().userId,
+                targetPeerId: peerId
+            });
+            logMsg('ICE', `Sent candidate to ${peerId}`);
+        }
+    };
+
+    pc.oniceconnectionstatechange = () => {
+        logMsg('ICE', `Connection state for ${peerId}: ${pc.iceConnectionState}`);
+        const conn = deps.peerConnections.get(peerId);
+        if (!conn) return;
+
+        const mediaStore = useMediaStore.getState();
+
+        switch (pc.iceConnectionState) {
+            case 'checking':
+                conn.connectionState = PeerConnectionState.CONNECTING;
+                mediaStore.updatePeerState(peerId, PeerConnectionState.CONNECTING);
+                break;
+            case 'connected':
+            case 'completed':
+                conn.connectionState = PeerConnectionState.CONNECTED;
+                mediaStore.updatePeerState(peerId, PeerConnectionState.CONNECTED);
+                deps.activePeers.add(peerId);
+                break;
+            case 'failed':
+                conn.connectionState = PeerConnectionState.FAILED;
+                conn.iceRetryCount++;
+                if (conn.iceRetryCount < ICE_RETRY_MAX) {
+                    retryIceConnection(pc, peerId, deps);
+                }
+                deps.activePeers.delete(peerId);
+                break;
+            case 'closed':
+                conn.connectionState = PeerConnectionState.CLOSED;
+                deps.activePeers.delete(peerId);
+                break;
+        }
+        deps.peerConnections.set(peerId, conn);
+    };
+
+    // Add connection state change handler
+    pc.onconnectionstatechange = () => {
+        logMsg('CONN', `Connection state for ${peerId}: ${pc.connectionState}`);
+    };
+
+    // Add signaling state change handler
+    pc.onsignalingstatechange = () => {
+        logMsg('SIGNAL', `Signaling state for ${peerId}: ${pc.signalingState}`);
+    };
+
+    pc.ontrack = (event) => {
+        const conn = deps.peerConnections.get(peerId);
+        if (!conn) return;
+
+        const kind = event.track.kind as 'audio' | 'video';
+        conn.trackReadyState[kind] = {
+            track: event.track,
+            ready: true,
+            timestamp: Date.now()
+        };
+        conn.trackStatus[kind] = true;
+        conn.lastTrackUpdate = Date.now();
+        
+        // Add to MediaStore immediately when track arrives
+        const mediaStore = useMediaStore.getState();
+        mediaStore.addPeerTrack(peerId, event.track, event.streams[0]);
+        mediaStore.updateTrackStatus(peerId, kind, true);
+        
+        // Update connection state
+        if (conn.trackStatus.audio && conn.trackStatus.video) {
+            conn.connectionState = PeerConnectionState.READY;
+        }
+        
+        // Update MediaStore connection state
+        mediaStore.updatePeerState(peerId, conn.connectionState);
+        
+        // Ensure peer is marked as active
+        deps.activePeers.add(peerId);
+        
+        deps.peerConnections.set(peerId, conn);
+        
+        // Enhanced logging
+        logMsg('TRACK', `Added ${kind} track from ${peerId}`, {
+            trackId: event.track.id,
+            readyState: event.track.readyState,
+            enabled: event.track.enabled,
+            streamId: event.streams[0]?.id
+        });
+    };
+
+    // Add any pending candidates
+    const pending = iceCandidateQueues.get(peerId)?.candidates || [];
+    for (const candidate of pending) {
+        await pc.addIceCandidate(new RTCIceCandidate(candidate));
+    }
+    iceCandidateQueues.delete(peerId);
+
+    return pc;
+};
+
+const handleOffer = async (content: OfferContent, deps: MessageHandlerDependencies) => {
+    const peerId = content.fromPeerID || content.fromPeerId || content.fromPeer;
+    const sdp = content.sdp;
+    
+    if (!peerId) {
+        logMsg('ERROR', 'No peer ID in offer');
+        return;
+    }
+
+    logMsg('OFFER', `Handling offer from ${peerId}`);
+    
+    try {
+        // Use setupPeerConnection instead of creating connection directly
+        const pc = await setupPeerConnection(peerId, deps);
+        
+        // Set remote description (the offer)
+        const remoteDesc = new RTCSessionDescription({
+            type: 'offer',
+            sdp: typeof sdp === 'string' ? sdp : sdp.sdp
+        });
+        
+        await pc.setRemoteDescription(remoteDesc);
+        logMsg('SDP', `Remote description set for ${peerId}`);
+
+        // Create and set local description (the answer)
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        
+        // Send answer
+        deps.sendMessage('answer', {
+            sdp: answer,
+            fromPeerID: deps.getState().userId,
+            targetPeerID: peerId,
+            type: 'answer'
+        });
+        
+        // Process any queued candidates
+        await processQueuedCandidates(pc, peerId);
+
+    } catch (err) {
+        logMsg('ERROR', `Failed to handle offer from ${peerId}: ${err}`);
+        const failedConn = deps.peerConnections.get(peerId);
+        if (failedConn) {
+            failedConn.connection.close();
+            deps.peerConnections.delete(peerId);
+        }
+    }
+};
+
+// Separate function for setting up event handlers and tracks
+const setupPeerConnectionHandlers = async (
+    pc: RTCPeerConnection, 
+    peerId: string, 
+    deps: MessageHandlerDependencies
+) => {
+    // Add local tracks
+    const mediaStore = useMediaStore.getState();
+    const localStream = mediaStore.localStream;
+    if (localStream) {
+        localStream.getTracks().forEach(track => {
+            pc.addTrack(track, localStream);
+            logMsg('TRACK', `Added ${track.kind} track to peer connection ${peerId}`);
+        });
+    }
+
+    // Set up event handlers
+    pc.onicecandidate = (event) => {
+        if (event.candidate) {
+            deps.sendMessage('iceCandidate', {
+                candidate: event.candidate,
+                fromPeerId: deps.getState().userId,
+                targetPeerId: peerId
+            });
+            logMsg('ICE', `Sent candidate to ${peerId}`);
+        }
+    };
+
+    // Store the connection
+    const peerConn = createPeerConnection(peerId, pc);
+    deps.peerConnections.set(peerId, peerConn);
 };
 
 const handleAnswer = async (content: AnswerContent, deps: MessageHandlerDependencies) => {
-    console.log('Answer message content:', content);
-    console.log(`[ANSWER] Received from ${content.fromPeerId}`);
-    
     if (!content.fromPeerId) {
-        console.log("[ANSWER] Missing from peer ID");
+        logMsg('ERROR', 'Missing from peer ID');
         return;
     }
 
     const peerId = content.fromPeerId;
-    const pc = deps.getState().peerConnections.get(peerId);
+    const pc = deps.peerConnections.get(peerId);
     
     if (!pc) {
-        console.error(`[ANSWER] No connection found for peer ${peerId}`);
+        logMsg('ERROR', `No connection found for peer ${peerId}`);
         return;
     }
-    
+
     try {
+        // 1. Validate signaling state
         if (pc.connection.signalingState === 'stable') {
-            console.log('[ANSWER] Connection already stable, ignoring answer');
+            logMsg('ANSWER', `Connection already stable for ${peerId}, ignoring answer`);
             return;
         }
 
         if (pc.connection.signalingState !== 'have-local-offer') {
-            console.log(`[ANSWER] Wrong signaling state for answer: ${pc.connection.signalingState}`);
+            logMsg('ERROR', `Wrong signaling state for ${peerId}: ${pc.connection.signalingState}`);
             return;
         }
 
-        if (!content.targetPeerId && !content.targetPeerID) {
-            console.log("[ANSWER] Missing target peer ID");
-            return;
-        }
-
-        if (!content.sdp || (!content.sdp.sdp && !content.sdp.type)) {
-            console.log("[ANSWER] Invalid answer message structure");
-            return;
-        }
-
+        // 2. Set remote description (answer)
+        logMsg('SDP', `Setting remote description (answer) for ${peerId}`);
         await pc.connection.setRemoteDescription(new RTCSessionDescription({
             type: 'answer',
             sdp: typeof content.sdp === 'string' ? content.sdp : content.sdp.sdp
         }));
         logMsg('ANSWER', `Set remote description for ${peerId}`);
 
-        // Add local tracks if needed
-        const localStream = deps.getState().localStream;
-        if (localStream) {
-            localStream.getTracks().forEach(track => {
-                if (!pc.connection.getSenders().find(s => s.track?.id === track.id)) {
-                    pc.connection.addTrack(track, localStream);
-                    logMsg('TRACK', `Added ${track.kind} track after answer for ${peerId}`);
-                }
-            });
-        }
-
-        // Process queued candidates in one place
+        // 3. Process any queued ICE candidates now that we have remote description
+        logMsg('ICE', `Processing queued candidates for ${peerId}`);
         await processQueuedCandidates(pc.connection, peerId);
         
-    } catch (err) {
-        console.error(`[ANSWER] Failed to handle answer from ${peerId}:`, err);
-    }
-};
-
-// At the top with other state management
-const trackStatusMap = new Map<string, { audio: boolean, video: boolean }>();
-
-// Update the createPeerConnection function to initialize track status
-const createPeerConnection = (peerId: string, deps: MessageHandlerDependencies): PeerConnection => {
-    const connection = new RTCPeerConnection(deps.getState().rtcConfig);
-    
-    // Set up ontrack handler
-    connection.ontrack = (event) => {
-        const trackType = event.track.kind as 'audio' | 'video';
-        
-        // Update stream management
-        const currentStreams = new Map(deps.getState().remoteStreams);
-        const streamManager = createPeerStreamManager(
-            currentStreams.get(peerId) || new MediaStream()
-        );
-        
-        // Log before state
-        const beforeAudio = streamManager.hasTrackType('audio');
-        const beforeVideo = streamManager.hasTrackType('video');
-        logMsg('TRACK', `Before adding ${trackType} track - Audio: ${beforeAudio}, Video: ${beforeVideo}`);
-
-        // Update the track
-        streamManager.updateTrack(event.track);
-        
-        // Update the streams map
-        currentStreams.set(peerId, streamManager.stream);
-        
-        // Log after state
-        const hasAudio = streamManager.hasTrackType('audio');
-        const hasVideo = streamManager.hasTrackType('video');
-        
-        logMsg('TRACK', `After adding ${trackType} track - Audio: ${hasAudio}, Video: ${hasVideo}`);
-        
-        // Only activate peer when both tracks are present
-        if (hasAudio && hasVideo) {
-            const currentPeers = new Set(deps.getState().activePeers);
-            if (!currentPeers.has(peerId)) {
-                currentPeers.add(peerId);
-                deps.setState.setActivePeers(currentPeers);
-                logMsg('PEERS', `Added ${peerId} to active peers - has both tracks`);
-            }
-        }
-        
-        deps.setState.setRemoteStreams(currentStreams);
-    };
-
-    // Handle track ended events
-    connection.onconnectionstatechange = () => {
-        if (connection.connectionState === 'disconnected' || connection.connectionState === 'failed') {
-            const currentStatus = trackStatusMap.get(peerId);
-            if (currentStatus) {
-                trackStatusMap.set(peerId, { audio: false, video: false });
-                const currentPeers = new Set(deps.getState().activePeers);
-                currentPeers.delete(peerId);
-                deps.setState.setActivePeers(currentPeers);
-                logMsg('PEERS', `Deactivated peer ${peerId} - connection ${connection.connectionState}`);
-            }
-        }
-    };
-
-    return {
-        id: peerId,
-        connection,
-        trackStatus: { audio: false, video: false },
-        connected: false,
-        negotiationNeeded: false
-    };
-};
-
-// Clean up function to remove peer
-const removePeer = (peerId: string, deps: MessageHandlerDependencies) => {
-    trackStatusMap.delete(peerId);
-    const currentPeers = new Set(deps.getState().activePeers);
-    currentPeers.delete(peerId);
-    deps.setState.setActivePeers(currentPeers);
-    
-    const streams = new Map(deps.getState().remoteStreams);
-    streams.delete(peerId);
-    deps.setState.setRemoteStreams(streams);
-    
-    deps.peerConnections.delete(peerId);
-};
-
-const handleOffer = async (content: OfferContent, deps: MessageHandlerDependencies) => {
-    const { fromPeerId, sdp } = content;
-    if (!fromPeerId || !sdp) return;
-
-    let pc = deps.peerConnections.get(fromPeerId);
-    if (!pc) {
-        pc = createPeerConnection(fromPeerId, deps);
-        deps.peerConnections.set(fromPeerId, pc);
-    }
-
-    try {
-        await pc.connection.setRemoteDescription(new RTCSessionDescription(sdp));
-        await processQueuedCandidates(pc.connection, fromPeerId);
-        
-        // Add local tracks BEFORE creating answer
-        const localStream = deps.getState().localStream;
+        // 4. Verify local tracks (shouldn't need to add, but verify)
+        const mediaStore = useMediaStore.getState();
+        const localStream = mediaStore.localStream;
         if (localStream) {
             const senders = pc.connection.getSenders();
             localStream.getTracks().forEach(track => {
-                // Only add if not already present
-                if (!senders.find(sender => sender.track?.id === track.id)) {
-                    pc!.connection.addTrack(track, localStream);
-                    logMsg('TRACK', `Added ${track.kind} track to answer for ${fromPeerId}`);
+                if (!senders.find(s => s.track?.id === track.id)) {
+                    logMsg('TRACK', `Adding missing ${track.kind} track for ${peerId}`);
+                    pc.connection.addTrack(track, localStream);
                 }
             });
         }
 
-        const answer = await pc.connection.createAnswer();
-        await pc.connection.setLocalDescription(answer);
-
-        // Structure the answer message
-        const answerMessage = {
-            targetPeerID: fromPeerId,
-            fromPeerID: deps.getState().userId,
-            fromPeerId: deps.getState().userId, // Add both variants for compatibility
-            sdp: answer
-        };
-
-        logMsg('ANSWER', `Sending answer to peer: ${fromPeerId}`);
-        deps.sendMessage('answer', answerMessage);
-
-        // Check tracks after setting local description
-        const peerStream = deps.getState().remoteStreams.get(fromPeerId);
-        if (peerStream) {
-            const hasAudio = peerStream.getAudioTracks().length > 0;
-            const hasVideo = peerStream.getVideoTracks().length > 0;
-            logMsg('TRACK', `Peer ${fromPeerId} tracks - Audio: ${hasAudio}, Video: ${hasVideo}`);
-            
-            // Update peer connection status
-            const peerConnection = deps.peerConnections.get(fromPeerId);
-            if (peerConnection) {
-                deps.peerConnections.set(fromPeerId, {
-                    ...peerConnection,
-                    trackStatus: { audio: hasAudio, video: hasVideo },
-                    stream: peerStream,
-                    connected: true
-                });
-                logMsg('PEERS', `Updated ${fromPeerId} track status - Audio: ${hasAudio}, Video: ${hasVideo}`);
-            }
-        }
-    } catch (error) {
-        console.error('Error handling offer:', error);
-    }
-};
-
-const handleIceCandidate = async (content: IceCandidateContent, deps: MessageHandlerDependencies) => {
-    console.log('ICE candidate content:', content);
-    
-    const { candidate } = content;
-    const fromId = content.fromPeerId || content.fromPeerID || content.from;
-    
-    if (!fromId) {
-        logMsg('ERROR', 'Missing from peer ID');
-        return;
-    }
-
-    // Get the peer connection using fromId instead of targetId
-    const pc = deps.peerConnections.get(fromId);
-    if (!pc) {
-        logMsg('ERROR', `No connection found for peer ${fromId}`);
-        return;
-    }
-
-    try {
-        await pc.connection.addIceCandidate(candidate);
-        logMsg('ICE', `Added candidate from ${fromId}`);
+        logMsg('CONN', `Answer processing complete for ${peerId}`);
+        
     } catch (err) {
-        logMsg('ERROR', `Failed to add ICE candidate: ${err}`);
+        logMsg('ERROR', `Failed to handle answer from ${peerId}: ${err}`);
+        pc.connectionState = PeerConnectionState.FAILED;
+        deps.peerConnections.set(peerId, pc);
     }
 };
 
-const attachPeerConnectionHandlers = (pc: RTCPeerConnection, peerId: string, deps: MessageHandlerDependencies) => {
-    pc.ontrack = (event) => {
-        logMsg('TRACK', `Received ${event.track.kind} track from ${peerId}`);
-        
-        // Get or create stream for this peer
-        const currentStreams = new Map(deps.getState().remoteStreams);
-        let peerStream = currentStreams.get(peerId);
-        
-        if (!peerStream) {
-            peerStream = new MediaStream();
-            currentStreams.set(peerId, peerStream);
-        }
-        
-        // Add track if not already present
-        if (!peerStream.getTracks().find(t => t.id === event.track.id)) {
-            peerStream.addTrack(event.track);
-            deps.setState.setRemoteStreams(currentStreams);
-            logMsg('TRACK', `Added ${event.track.kind} track to stream for ${peerId}`);
-            
-            // Check track status after adding
-            const hasAudio = peerStream.getAudioTracks().length > 0;
-            const hasVideo = peerStream.getVideoTracks().length > 0;
-            logMsg('TRACK', `Peer ${peerId} tracks - Audio: ${hasAudio}, Video: ${hasVideo}`);
-            
-            if (hasAudio && hasVideo) {
-                const currentPeers = new Set(deps.getState().activePeers);
-                if (!currentPeers.has(peerId)) {
-                    currentPeers.add(peerId);
-                    deps.setState.setActivePeers(currentPeers);
-                    logMsg('PEERS', `Added ${peerId} to active peers - has both tracks`);
-                }
-            }
-        }
-    };
-
-    pc.onconnectionstatechange = () => {
-        logMsg('CONNECTION', `State for ${peerId}: ${pc.connectionState}`);
-        if (pc.connectionState === 'connected') {
-            logMsg('CONNECTION', `Peer ${peerId} fully connected`);
-            // Ensure peer is in active peers list when connected
-            const currentPeers = new Set(deps.getState().activePeers);
-            if (!currentPeers.has(peerId)) {
-                currentPeers.add(peerId);
-                deps.setState.setActivePeers(currentPeers);
-            }
-        } else if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed') {
-            const currentPeers = new Set(deps.getState().activePeers);
-            currentPeers.delete(peerId);
-            deps.setState.setActivePeers(currentPeers);
-        }
-    };
-};
-
-// Add the server test function at the top with other utility functions
-const testIceServer = async (server: RTCIceServer): Promise<boolean> => {
-    const pc = new RTCPeerConnection({
-        iceServers: [server],
-        iceTransportPolicy: server.urls.toString().startsWith('turn:') ? 'relay' : 'all'
-    });
-    
-    try {
-        return new Promise<boolean>((resolve) => {
-            const timeout = setTimeout(() => {
-                pc.close();
-                resolve(false);
-            }, 5000);
-
-            pc.onicecandidate = (e) => {
-                if (e.candidate) {
-                    // For TURN servers, we specifically look for relay candidates
-                    if (server.urls.toString().startsWith('turn:')) {
-                        if (e.candidate.type === 'relay') {
-                            clearTimeout(timeout);
-                            pc.close();
-                            resolve(true);
-                        }
-                    } else {
-                        // For STUN servers, any valid candidate is good
-                        clearTimeout(timeout);
-                        pc.close();
-                        resolve(true);
-                    }
-                }
-            };
-
-            const dc = pc.createDataChannel('test');
-            pc.createOffer()
-                .then(offer => pc.setLocalDescription(offer))
-                .catch(() => {
-                    clearTimeout(timeout);
-                    pc.close();
-                    resolve(false);
-                });
-        });
-    } catch (err) {
-        logMsg('ERROR', `Server test failed: ${err}`);
-        return false;
-    }
-};
-
-// Add this function near the top with other utility functions
+// Add at the top with other utility functions
 const getIceServers = async () => {
     try {
-        const url = '/api/ice-servers';
+        const url = 'https://nochat.io/api/ice-servers';
         logMsg('[ICE]', `Fetching from URL: ${url}`);
         const response = await fetch(url);
-        
-        logMsg('[ICE]', `Response status: ${response.status}`);
-        logMsg('[ICE]', `Response headers:`, Object.fromEntries(response.headers));
-        
-        // Clone response and get text for logging
-        const clonedResponse = response.clone();
-        const responseText = await clonedResponse.text();
-        logMsg('[ICE]', `Raw response:`, responseText);
 
         if (!response.ok) {
             throw new Error(`HTTP error! status: ${response.status}`);
@@ -435,7 +360,6 @@ const getIceServers = async () => {
         
         const data = await response.json();
         logMsg('[ICE]', 'Parsed response:', data);
-        console.log('[ICE] Fetched servers:', data.iceServers);
         return data.iceServers;
     } catch (error) {
         console.error('[ICE] Failed to fetch servers:', error);
@@ -444,280 +368,42 @@ const getIceServers = async () => {
     }
 };
 
-// Update the setupPeerConnection function
-const setupPeerConnection = async (peerId: string, deps: MessageHandlerDependencies): Promise<RTCPeerConnection> => {
-    const iceServers = await getIceServers();
-    
-    const pc = new RTCPeerConnection({
-        iceServers,
-        iceTransportPolicy: 'all',
-        bundlePolicy: 'max-bundle',
-        iceCandidatePoolSize: 10,
-        rtcpMuxPolicy: 'require'
-    });
-    
-    deps.peerConnections.set(peerId, {
-        id: peerId,
-        connection: pc,
-        trackStatus: { audio: false, video: false },
-        connected: false,
-        negotiationNeeded: false
-    });
-
-    // Add local tracks immediately if available
-    const localStream = deps.getState().localStream;
-    if (localStream) {
-        try {
-            const senders = pc.getSenders();
-            localStream.getTracks().forEach(track => {
-                // Only add track if it's not already added
-                if (!senders.find(sender => sender.track?.id === track.id)) {
-                    pc.addTrack(track, localStream);
-                    // Update local track status
-                    const peerConn = deps.peerConnections.get(peerId);
-                    if (peerConn) {
-                        peerConn.trackStatus = {
-                            ...peerConn.trackStatus,
-                            [track.kind]: true
-                        };
-                    }
-                    logMsg('TRACK', `Added ${track.kind} track to connection for ${peerId}`);
-                }
-            });
-        } catch (err) {
-            logMsg('ERROR', `Failed to add tracks: ${err}`);
-        }
-    }
-
-    // Add track handling
-    pc.ontrack = (event) => {
-        logMsg('TRACK', `Added ${event.track.kind} track from ${peerId}`);
-        
-        const currentStreams = new Map(deps.getState().remoteStreams);
-        let peerStream = currentStreams.get(peerId);
-        
-        if (!peerStream) {
-            peerStream = new MediaStream();
-            currentStreams.set(peerId, peerStream);
-        }
-        
-        // Add track and update peer connection status
-        if (!peerStream.getTracks().find(t => t.id === event.track.id)) {
-            peerStream.addTrack(event.track);
-            deps.setState.setRemoteStreams(currentStreams);
-            
-            // Update peer connection track status
-            const peerConnection = deps.peerConnections.get(peerId);
-            if (peerConnection) {
-                const updatedTrackStatus = {
-                    ...peerConnection.trackStatus,
-                    [event.track.kind]: true  // Accumulate track status
-                };
-                
-                deps.peerConnections.set(peerId, {
-                    ...peerConnection,
-                    trackStatus: updatedTrackStatus,
-                    stream: peerStream
-                });
-                
-                // Only activate if both tracks are present
-                if (updatedTrackStatus.audio && updatedTrackStatus.video) {
-                    const currentPeers = new Set(deps.getState().activePeers);
-                    currentPeers.add(peerId);
-                    deps.setState.setActivePeers(currentPeers);
-                    logMsg('PEERS', `Added ${peerId} to active peers - has both tracks`);
-                }
-            }
-        }
-    };
-
-    pc.oniceconnectionstatechange = () => {
-        logMsg('ICE', `Connection state for ${peerId}: ${pc.iceConnectionState}`);
-        
-        if (pc.iceConnectionState === 'failed' || pc.iceConnectionState === 'disconnected') {
-            retryIceConnection(pc, peerId, deps);
-        } else if (pc.iceConnectionState === 'connected') {
-            // Reset any recovery flags when successfully connected
-            recoveryAttempted.set(peerId, false);
-        }
-    };
-
-    pc.onicegatheringstatechange = () => {
-        logMsg('ICE', `Gathering state for ${peerId}: ${pc.iceGatheringState}`);
-    };
-
-    pc.onicecandidate = (event) => {
-        if (event.candidate) {
-            // Log the candidate
-            console.log('[ICE] THE CANDIDATE BEING SENT IS:', event.candidate);
-            deps.sendMessage('iceCandidate', {
-                candidate: event.candidate,
-                fromPeerID: deps.getState().userId,
-                targetPeerID: peerId
-            });
-        }
-    };
-
-    // Add connection state monitoring
-    pc.oniceconnectionstatechange = () => {
-        logMsg('ICE', `Connection state for ${peerId}: ${pc.iceConnectionState}`);
-        if (pc.iceConnectionState === 'connected') {
-            // Double check our peer is activated once connected
-            const currentStreams = deps.getState().remoteStreams;
-            const peerStream = currentStreams.get(peerId);
-            if (peerStream) {
-                const hasAudio = peerStream.getAudioTracks().length > 0;
-                const hasVideo = peerStream.getVideoTracks().length > 0;
-                if (hasAudio && hasVideo) {
-                    const currentPeers = new Set(deps.getState().activePeers);
-                    if (!currentPeers.has(peerId)) {
-                        currentPeers.add(peerId);
-                        deps.setState.setActivePeers(currentPeers);
-                        logMsg('PEERS', `Added ${peerId} to active peers after ICE connection`);
-                    }
-                }
-            }
-        }
-    };
-
-    // Add connection state change monitoring
-    pc.onconnectionstatechange = () => {
-        logMsg('CONNECTION', `State for ${peerId}: ${pc.connectionState}`);
-        if (pc.connectionState === 'connected') {
-            logMsg('CONNECTION', `Peer ${peerId} fully connected`);
-        }
-    };
-
-    // Monitor signaling state
-    pc.onsignalingstatechange = () => {
-        logMsg('SIGNALING', `State for ${peerId}: ${pc.signalingState}`);
-    };
-
-    // Add negotiation needed handler
-    pc.onnegotiationneeded = () => {
-        logMsg('NEGOTIATION', `Needed for peer ${peerId}`);
-    };
-
-    return pc;
-};
-
-const createAndSendOffer = async (peerId: string, deps: MessageHandlerDependencies) => {
-    logMsg('OFFER', `Creating for peer: ${peerId}`);
-    
-    try {
-        // Create new connection (tracks are added during setup)
-        const pc = await setupPeerConnection(peerId, deps);
-        
-        // Add to peerConnections map BEFORE creating offer
-        deps.peerConnections.set(peerId, {
-            id: peerId,
-            connection: pc,
-            trackStatus: { audio: false, video: false },
-            connected: false,
-            negotiationNeeded: false
-        });
-        
-        attachPeerConnectionHandlers(pc, peerId, deps);
-
-        const offer = await pc.createOffer();
-        await pc.setLocalDescription(offer);
-        
-        deps.sendMessage('offer', {
-            sdp: {
-                type: 'offer',
-                sdp: offer.sdp
-            },
-            fromPeerId: deps.getState().userId,
-            targetPeerId: peerId
-        });
-        
-        logMsg('OFFER', `Created new offer for peer ${peerId}`);
-    } catch (error) {
-        logMsg('ERROR', `Offer creation failed for ${peerId}: ${error}`);
-        throw error;
-    }
-};
-
-interface PeerStreamManager {
-    stream: MediaStream;
-    getAudioTracks: () => MediaStreamTrack[];
-    getVideoTracks: () => MediaStreamTrack[];
-    hasTrackType: (type: 'audio' | 'video') => boolean;
-    addTrack: (track: MediaStreamTrack) => void;
-    updateTrack: (track: MediaStreamTrack) => void;
-}
-
-function createPeerStreamManager(stream: MediaStream): PeerStreamManager {
-    // Create a new stream if one isn't provided
-    const mediaStream = stream || new MediaStream();
-    
-    return {
-        stream: mediaStream,
-        getAudioTracks: () => mediaStream.getAudioTracks(),
-        getVideoTracks: () => mediaStream.getVideoTracks(),
-        hasTrackType: (type: 'audio' | 'video') => 
-            type === 'audio' ? 
-                mediaStream.getAudioTracks().length > 0 : 
-                mediaStream.getVideoTracks().length > 0,
-        addTrack: (track: MediaStreamTrack) => {
-            // Only add if track of same ID doesn't exist
-            const existingTracks = mediaStream.getTracks();
-            if (!existingTracks.find(t => t.id === track.id)) {
-                mediaStream.addTrack(track);
-            }
-        },
-        updateTrack: (track: MediaStreamTrack) => {
-            const trackType = track.kind;
-            const existingTracks = trackType === 'audio' ? 
-                mediaStream.getAudioTracks() : 
-                mediaStream.getVideoTracks();
-            
-            // Only remove track of same type if it's different from new track
-            existingTracks.forEach(existing => {
-                if (existing.id !== track.id) {
-                    mediaStream.removeTrack(existing);
-                }
-            });
-            
-            // Add new track if it's not already present
-            if (!mediaStream.getTracks().find(t => t.id === track.id)) {
-                mediaStream.addTrack(track);
-            }
-        }
-    };
-}
-
 const processQueuedCandidates = async (pc: RTCPeerConnection, peerId: string) => {
-    if (!pc.remoteDescription) {
-        logMsg('ICE', `Skipping candidate processing - no remote description yet for ${peerId}`);
+    const queue = iceCandidateQueues.get(peerId);
+    if (!queue || queue.candidates.length === 0) {
+        logMsg('ICE', `No queued candidates for ${peerId}`);
         return;
     }
 
-    const candidates = iceCandidateQueue.get(peerId) || [];
-    logMsg('ICE', `Processing ${candidates.length} queued candidates for ${peerId}`);
-    
-    if (candidates.length > 0) {
-        // Sort candidates to prioritize relay candidates
-        candidates.sort((a, b) => {
-            const aIsRelay = a.candidate.includes('relay');
-            const bIsRelay = b.candidate.includes('relay');
-            return bIsRelay ? 1 : aIsRelay ? -1 : 0;
-        });
+    logMsg('ICE', `Processing ${queue.candidates.length} queued candidates for ${peerId}`);
+    let successCount = 0;
 
-        for (const candidate of candidates) {
-            try {
-                await pc.addIceCandidate(candidate);
-                logMsg('ICE', `Added queued candidate for ${peerId}: ${candidate.candidate.slice(0, 50)}...`);
-            } catch (error) {
-                logMsg('ERROR', `Failed to add ICE candidate: ${error}`);
-            }
+    for (const candidate of queue.candidates) {
+        try {
+            await pc.addIceCandidate(new RTCIceCandidate(candidate));
+            successCount++;
+            logMsg('ICE', `Added queued candidate ${successCount} for ${peerId}`);
+        } catch (error) {
+            logMsg('ERROR', `Failed to add ICE candidate for ${peerId}: ${error}`);
         }
-        iceCandidateQueue.delete(peerId);
+    }
+
+    // Only clear queue if we processed all candidates
+    if (successCount === queue.candidates.length) {
+        iceCandidateQueues.delete(peerId);
+        logMsg('ICE', `Successfully processed all candidates for ${peerId}`);
+    } else {
+        logMsg('ICE', `Processed ${successCount}/${queue.candidates.length} candidates for ${peerId}`);
     }
 };
 
-// Add this new function
 const retryIceConnection = async (pc: RTCPeerConnection, peerId: string, deps: MessageHandlerDependencies, attempt = 0) => {
+    // Don't retry if we're still in initial negotiation
+    if (pc.signalingState !== 'stable') {
+        logMsg('ICE', `Skipping retry for ${peerId} - negotiation in progress`);
+        return;
+    }
+
     if (attempt >= ICE_RETRY_MAX) {
         logMsg('ICE', `Failed to establish connection with ${peerId} after ${ICE_RETRY_MAX} attempts`);
         return;
@@ -727,33 +413,93 @@ const retryIceConnection = async (pc: RTCPeerConnection, peerId: string, deps: M
         logMsg('ICE', `Retrying ICE connection for ${peerId}, attempt ${attempt + 1}`);
         try {
             await pc.restartIce();
-            // Create new offer if we're the initiator
-            if (deps.getState().isInitiator) {
+            // Only create new offer if we're the initiator and in stable state
+            if (deps.getState().isInitiator && pc.signalingState === 'stable') {
                 const offer = await pc.createOffer({ iceRestart: true });
                 await pc.setLocalDescription(offer);
                 deps.sendMessage('offer', {
                     sdp: offer,
-                    fromPeerID: deps.getState().userId,
-                    targetPeerID: peerId
-                });
+                fromPeerID: deps.getState().userId,
+                targetPeerID: peerId
+                });  // Add media flag
             }
-            
-            // Set a timeout for the next retry
-            setTimeout(() => {
-                if (pc.iceConnectionState !== 'connected' && pc.iceConnectionState !== 'completed') {
-                    retryIceConnection(pc, peerId, deps, attempt + 1);
-                }
-            }, ICE_RETRY_DELAY);
         } catch (error) {
             logMsg('ERROR', `ICE retry failed for ${peerId}: ${error}`);
+            return;
         }
     }
+
+    // Only schedule next retry if still needed
+    if (pc.iceConnectionState !== 'connected' && pc.iceConnectionState !== 'completed') {
+        setTimeout(() => retryIceConnection(pc, peerId, deps, attempt + 1), ICE_RETRY_DELAY);
+    }
 };
+
+const handleIceCandidate = async (content: IceCandidateContent, deps: MessageHandlerDependencies) => {
+    const { candidate, fromPeerId, fromPeerID } = content;
+    const peerId = fromPeerId || fromPeerID;
+    
+    if (!peerId) {
+        logMsg('ERROR', 'Missing from peer ID');
+        return;
+    }
+
+    // Always ensure we have a queue for this peer
+    if (!iceCandidateQueues.has(peerId)) {
+        iceCandidateQueues.set(peerId, {
+            candidates: [],
+            hasRemoteDescription: false,
+            createdAt: Date.now(),
+            lastUpdated: Date.now(),
+            processedCount: 0,
+            connectionState: undefined,
+            gatheringState: undefined
+        });
+    }
+
+    const pc = deps.peerConnections.get(peerId)?.connection;
+    if (!pc) {
+        // Queue early candidates
+        const queue = iceCandidateQueues.get(peerId)!;
+        queue.candidates.push(candidate);
+        queue.lastUpdated = Date.now();
+        logMsg('ICE', `Queued early candidate for ${peerId} - no connection yet`);
+        return;
+    }
+
+    try {
+        if (pc.remoteDescription && pc.currentRemoteDescription) {
+            await pc.addIceCandidate(new RTCIceCandidate(candidate));
+            logMsg('ICE', `Added candidate from ${peerId}`);
+        } else {
+            // Queue the candidate
+            const queue = iceCandidateQueues.get(peerId)!;
+            queue.candidates.push(candidate);
+            queue.lastUpdated = Date.now();
+            logMsg('ICE', `Queued candidate for ${peerId} - waiting for remote description`);
+        }
+    } catch (error) {
+        logMsg('ERROR', `Failed to handle ICE candidate: ${error}`);
+    }
+};
+
+const updateConnectionState = (peerId: string, state: PeerConnectionState, deps: MessageHandlerDependencies) => {
+    const peerConn = deps.peerConnections.get(peerId);
+    if (peerConn) {
+        peerConn.connectionState = state;
+        deps.peerConnections.set(peerId, peerConn);
+        logMsg('STATE', `Peer ${peerId} connection state: ${state}`);
+    }
+};
+
+// At the top with other state variables
+const peersWithOffers = new Set<string>();
 
 export const createMessageHandler = (deps: MessageHandlerDependencies) => {
     return async (message: WebSocketMessage) => {
         const currentState = deps.getState();
-        logMsg('MSG', `${message.type} media:${currentState.mediaReady}`);
+        const mediaStore = useMediaStore.getState();
+        logMsg('MSG', `${message.type} media:${mediaStore.mediaReady}`);
         
         switch (message.type) {
             case 'startMeeting':
@@ -761,39 +507,8 @@ export const createMessageHandler = (deps: MessageHandlerDependencies) => {
                 deps.setState.setMeetingStarted(true);
                 deps.log('Meeting started - transitioning from lobby');
                 
-                // Fetch ICE servers from our endpoint
-                try {
-                    logMsg('[ICE]', 'Fetching ICE servers...');
-                    const response = await fetch('/api/ice-servers');
-                    if (!response.ok) {
-                        throw new Error(`HTTP error! status: ${response.status}`);
-                    }
-                    const data = await response.json();
-                    const iceServers = data.iceServers;
-                    
-                    // Test the fetched ICE servers
-                    logMsg('[ICE]', 'Testing STUN/TURN servers...');
-                    for (const server of iceServers) {
-                        const isWorking = await testIceServer(server);
-                        logMsg('[ICE]', `Server ${server.urls} ${isWorking ? 'is working' : 'failed'}`);
-                    }
-                    
-                    // Update RTCConfiguration with new ICE servers
-                    deps.setState.setRtcConfig({
-                        ...deps.getState().rtcConfig,
-                        iceServers
-                    });
-                } catch (error) {
-                    logMsg('ERROR', `Failed to fetch ICE servers: ${error}`);
-                    // Fall back to public STUN server
-                    deps.setState.setRtcConfig({
-                        ...deps.getState().rtcConfig,
-                        iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
-                    });
-                }
-                
                 // Check local media state
-                const localStream = deps.getState().localStream;
+                const localStream = mediaStore.localStream;
                 if (localStream) {
                     const videoTracks = localStream.getVideoTracks();
                     const audioTracks = localStream.getAudioTracks();
@@ -807,121 +522,91 @@ export const createMessageHandler = (deps: MessageHandlerDependencies) => {
                 // Get current state to ensure we have latest userId
                 const currentUserId = deps.getState().userId;
                 console.log('[MESSAGE HANDLER] THIS PEERS ID IS:', currentUserId);
-                // Log the users
-                console.log('[MESSAGE HANDLER] THE USERS ARE:', deps.getState().pendingPeers);
                 break;
 
             case 'createOffer': {
                 const peers = Array.isArray(message.content.peers) ? message.content.peers : [];
-                logMsg('OFFER', `Creating for ${peers.length} peers: ${peers.map(short).join(', ')}`);
+                const newPeers = peers.filter((peerId: string) => !peersWithOffers.has(peerId));
                 
-                if (currentState.mediaReady) {
-                    // Create offers for all peers we don't have connections with yet
-                    for (const peerId of peers) {
+                if (newPeers.length === 0) {
+                    logMsg('SKIP', 'All peers already processed');
+                    return;
+                }
+                
+                logMsg('OFFER', `Creating for ${newPeers.length} peers: ${newPeers.map(short).join(', ')}`);
+                
+                if (mediaStore.mediaReady) {
+                    for (const peerId of newPeers) {
                         if (!deps.peerConnections.has(peerId)) {
                             try {
-                                await createAndSendOffer(peerId, deps);
-                                logMsg('[OFFER]', `Created new offer for peer ${peerId}`);
+                                peersWithOffers.add(peerId);
+                                
+                                // 1. Setup peer connection
+                                const pc = await setupPeerConnection(peerId, deps);
+                                
+                                // 2. Verify tracks before creating offer
+                                const senders = pc.getSenders();
+                                logMsg('TRACK', `Pre-offer tracks for ${peerId}:`);
+                                senders.forEach(sender => {
+                                    logMsg('TRACK', `- ${sender.track?.kind || 'none'} track: ${
+                                        sender.track ? `enabled=${sender.track.enabled}, state=${sender.track.readyState}` : 'no track'
+                                    }`);
+                                });
+                                
+                                if (senders.length === 0) {
+                                    throw new Error('No tracks added to peer connection');
+                                }
+
+                                // 3. Create offer with detailed logging
+                                const offer = await pc.createOffer({
+                                    offerToReceiveAudio: true,
+                                    offerToReceiveVideo: true
+                                });
+                                
+                                logMsg('SDP', `Created offer for ${peerId}:`, {
+                                    type: offer.type,
+                                    sdpLineCount: offer.sdp ? offer.sdp.split('\n').length : 0,
+                                    hasAudio: offer?.sdp?.includes('m=audio') || false,
+                                    hasVideo: offer?.sdp?.includes('m=video') || false,
+                                    transceivers: pc.getTransceivers().length
+                                });
+
+                                // 4. Set local description
+                                await pc.setLocalDescription(offer);
+                                logMsg('SDP', `Set local description for ${peerId}`);
+                                
+                                // 5. Send offer
+                                deps.sendMessage('offer', {
+                                    sdp: offer,
+                                    fromPeerID: deps.getState().userId,
+                                    targetPeerID: peerId
+                                });
+                                
+                                logMsg('OFFER', `Created and sent offer for peer ${peerId}`);
+                                
                             } catch (error) {
                                 logMsg('ERROR', `Failed to create offer for ${peerId}: ${error}`);
+                                peersWithOffers.delete(peerId);
+                                const failedConn = deps.peerConnections.get(peerId);
+                                if (failedConn) {
+                                    failedConn.connection.close();
+                                    deps.peerConnections.delete(peerId);
+                                }
                             }
                         } else {
-                            logMsg('SKIP', `Already connected to peer ${peerId}`);
+                            logMsg('SKIP', `Already have connection to peer ${peerId}`);
                         }
                     }
                 } else {
-                    logMsg('WAIT', `Media not ready, queueing ${peers.length} peers`);
-                    deps.setState.setPendingPeers(peers);
+                    logMsg('WAIT', `Media not ready, queueing ${newPeers.length} peers`);
+                    deps.setState.setPendingPeers(newPeers);
                 }
                 break;
             }
 
-            case 'offer': {
-                const { sdp, fromPeerId, fromPeerID } = message.content;
-                const peerId = fromPeerId || fromPeerID;
-                
-                if (!peerId) {
-                    logMsg('ERROR', 'No peer ID in offer');
-                    return;
-                }
-
-                // Create or get peer connection
-                let pc = deps.peerConnections.get(peerId);
-                if (!pc) {
-                    const newPc = await setupPeerConnection(peerId, deps);
-                    pc = {
-                        id: peerId,
-                        connection: newPc,
-                        trackStatus: { audio: false, video: false },
-                        connected: false,
-                        negotiationNeeded: false
-                    };
-                    deps.peerConnections.set(peerId, pc);
-                }
-
-                // Process the offer first
-                await pc.connection.setRemoteDescription(new RTCSessionDescription(sdp));
-                await processQueuedCandidates(pc.connection, peerId);
-
-                // Add local tracks before creating answer
-                const localStream = deps.getState().localStream;
-                if (localStream) {
-                    localStream.getTracks().forEach(track => {
-                        if (!pc!.connection.getSenders().find(s => s.track?.id === track.id)) {
-                            pc!.connection.addTrack(track, localStream);
-                            logMsg('TRACK', `Added ${track.kind} track to answer for ${peerId}`);
-                        }
-                    });
-                }
-
-                // Create and send answer
-                const answer = await pc.connection.createAnswer();
-                await pc.connection.setLocalDescription(answer);
-
-                deps.sendMessage('answer', {
-                    targetPeerID: peerId,
-                    fromPeerID: currentState.userId,
-                    sdp: {
-                        type: answer.type,
-                        sdp: answer.sdp
-                    }
-                });
-
+            case 'offer':
+                await handleOffer(message.content, deps);
                 break;
-            }
-
-            case 'iceCandidate': {
-                const { candidate, fromPeerId, fromPeerID } = message.content;
-                const peerId = fromPeerId || fromPeerID;
-                
-                if (!peerId) {
-                    logMsg('ERROR', 'No peer ID in ICE candidate');
-                    return;
-                }
-
-                const pc = deps.peerConnections.get(peerId)?.connection;
-                if (!pc) {
-                    logMsg('ERROR', `No connection found for peer ${peerId}`);
-                    return;
-                }
-
-                try {
-                    if (pc.remoteDescription && pc.currentRemoteDescription) {
-                        await pc.addIceCandidate(new RTCIceCandidate(candidate));
-                        logMsg('ICE', `Added candidate from ${peerId}`);
-                    } else {
-                        // Queue the candidate
-                        if (!iceCandidateQueue.has(peerId)) {
-                            iceCandidateQueue.set(peerId, []);
-                        }
-                        iceCandidateQueue.get(peerId)!.push(new RTCIceCandidate(candidate));
-                        logMsg('ICE', `Queued candidate for ${peerId} - waiting for remote description`);
-                    }
-                } catch (error) {
-                    logMsg('ERROR', `Failed to handle ICE candidate: ${error}`);
-                }
-                break;
-            }
 
             case 'answer':
                 if (message.content) {
@@ -929,33 +614,27 @@ export const createMessageHandler = (deps: MessageHandlerDependencies) => {
                 }
                 break;
 
+            case 'iceCandidate':
+                await handleIceCandidate(message.content, deps);
+                break;
+
             case 'userID':
-                console.log('Handling userID message:', {
-                    content: message.content,
-                    currentUserId: deps.getState().userId
-                });
                 internalState.userId = message.content;
                 deps.setState.setUserId(message.content);
-                console.log('Internal state userId:', internalState.userId);
                 deps.setWindowState(message.content);
-                console.log(`User ID set to: ${message.content}`);
                 if (hasReceivedInitiatorStatus) {
                     deps.sendMessage('ready', { userId: message.content, initiator: currentState.isInitiator });
                 } else {
                     pendingUserId = message.content;
-                    console.log('Waiting for initiator status before sending ready');
                 }
                 break;
 
             case 'initiatorStatus':
                 const isInitiatorValue = message.content === 'true' || message.content === true;
-                console.log(`Setting initiator status to: ${isInitiatorValue}`);
                 deps.setState.setIsInitiator(isInitiatorValue);
                 hasReceivedInitiatorStatus = true;
                 
-                // If we were waiting to send ready, do it now
                 if (pendingUserId) {
-                    console.log('Sending delayed ready message');
                     deps.sendMessage('ready', { userId: pendingUserId, initiator: isInitiatorValue });
                     pendingUserId = null;
                 }
@@ -968,23 +647,47 @@ export const createMessageHandler = (deps: MessageHandlerDependencies) => {
                         : message.content;
 
                     deps.setState.setMessages([...deps.getState().messages, chatMessage]);
-                    console.log(`Chat message received from ${chatMessage.senderName}`);
                 } catch (error) {
                     console.log(`Error parsing chat message: ${error}`);
                 }
                 break;
 
             case 'userList':
-                console.log('Received user list:', message.content);
-                // Make sure we're properly handling the user list
                 if (message.content && typeof message.content === 'object') {
                     const users = Object.keys(message.content);
                     console.log('Updated user list:', users);
                 }
                 break;
 
+            case 'incoming_call':
+                const { from, fromName, roomId } = message.content;
+                logMsg('CALL', `Incoming call from ${fromName || from} for room ${roomId}`);
+                
+                try {
+                    if (Notification.permission === 'default') {
+                        await Notification.requestPermission();
+                    }
+
+                    if (Notification.permission === 'granted') {
+                        const notification = new Notification('Incoming Call', {
+                            body: `${fromName || from} is calling you`,
+                            icon: '/favicon.ico',
+                            requireInteraction: true,
+                        });
+
+                        notification.onclick = () => {
+                            window.focus();
+                            safeSetStorage('isInitiator', 'false');
+                            window.location.href = `/call/${roomId}`;
+                        };
+                    }
+                } catch (err) {
+                    logMsg('ERROR', `Error showing notification: ${err}`);
+                }
+                break;
+
             default:
-                console.log(`Unhandled message type: ${message.type}`);
+                logMsg('MSG', `Unhandled message type: ${message.type}`);
         }
     };
 }; 

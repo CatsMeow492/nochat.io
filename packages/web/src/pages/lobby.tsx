@@ -5,14 +5,12 @@ import {
   Button,
   Paper,
   Grid,
-  CircularProgress,
-  Fade,
   List,
   ListItem,
   ListItemText,
   IconButton,
-  useTheme,
-  Tooltip
+  Tooltip,
+  Fade,
 } from '@mui/material';
 import {
   Mic as MicIcon,
@@ -27,8 +25,8 @@ import DeviceToggle from '../components/DeviceToggle';
 import { User } from '../hooks/useRoomList';
 import { useLobbyState } from '../hooks/useLobbyState';
 import { validateTurnConfig } from '../config/webrtc';
-import { RTCConfiguration as config } from '../config/webrtc';
-
+import websocketService from '../services/websocket';
+import { useMediaStore } from '../store/mediaStore';
 
 interface LobbyOverlayProps {
   isInitiator: boolean;
@@ -36,82 +34,59 @@ interface LobbyOverlayProps {
   onStartMeeting: () => void;
   participants?: Array<User>;
   userId: string | null;
-
   onReadyChange: (ready: boolean) => void;
   roomId?: string;
-  onCameraToggle?: (enabled: boolean) => void;
-  onMicrophoneToggle?: (enabled: boolean) => void;
-  initialCameraEnabled?: boolean;
-  initialMicrophoneEnabled?: boolean;
-  mediaReady?: boolean;
+  onCameraToggle: (enabled: boolean) => void;
+  onMicrophoneToggle: (enabled: boolean) => void;
 }
 
-/**
- * A lobby overlay displaying the current state of the lobby
- * `number of participants`
- * 
- */
 const LobbyOverlay: React.FC<LobbyOverlayProps> = ({
-  isInitiator: propIsInitiator,
+  isInitiator,
   meetingStarted,
   onStartMeeting,
-  participants: propParticipants,
   userId,
   roomId,
   onReadyChange,
-  onCameraToggle = () => {},
-  onMicrophoneToggle = () => {},
-  initialCameraEnabled = true,
-  initialMicrophoneEnabled = true,
-  mediaReady = false,
-}) => {
-  const { participants, userCount } = useLobbyState({
-    roomId,
-    userId,
-    initialIsInitiator: propIsInitiator,
-  });
-
-  // Use the prop instead of the hook value
-  const isInitiator = propIsInitiator;
-
-  // Add effect to log state changes
+  onCameraToggle,
+  onMicrophoneToggle
+}: LobbyOverlayProps) => {
+  const [participants, setParticipants] = useState<string[]>([]);
+  const { mediaReady } = useMediaStore();
+  
   useEffect(() => {
-    console.log('Lobby state updated:', {
-      mediaReady,
-      isInitiator,
-      participantsCount: participants.length,
-      canStartMeeting: isInitiator && mediaReady && participants.length > 0
+    // Subscribe to WebSocket state changes
+    const unsubscribe = websocketService.subscribe('stateChange', (state) => {
+      if (state.activePeers) {
+        setParticipants(Array.from(state.activePeers));
+      }
     });
-  }, [mediaReady, isInitiator, participants]);
+
+    // Also subscribe to userList messages directly
+    const unsubscribeUserList = websocketService.subscribe('userList', (content) => {
+      if (content && Array.isArray(content.users)) {
+        setParticipants(content.users);
+        console.log('Updated participants:', content.users);
+      }
+    });
+
+    return () => {
+      unsubscribe();
+      unsubscribeUserList();
+    };
+  }, []);
+
+  // Get media state from store
+  const { audioEnabled, videoEnabled } = useMediaStore();
 
   const participantCount = participants.length;
 
   // State
-  const [isReady, setIsReady] = useState<boolean>(false);
   const [copied, setCopied] = useState<boolean>(false);
-
-  // State controls for devices
-  // TODO: Move logic to Redux store
-  const [isCameraEnabled, setIsCameraEnabled] = useState<boolean>(initialCameraEnabled);
-  const [isMicrophoneEnabled, setIsMicrophoneEnabled] = useState<boolean>(initialMicrophoneEnabled);
 
   // Only show start button when media is ready
   const canStartMeeting = isInitiator && mediaReady && participants.length > 0;
 
-  const handleCameraToggle = () => {
-    const newState = !isCameraEnabled;
-    setIsCameraEnabled(newState);
-    onCameraToggle?.(newState);
-  };
-
-  const handleMicrophoneToggle = () => {
-    const newState = !isMicrophoneEnabled;
-    setIsMicrophoneEnabled(newState);
-    onMicrophoneToggle?.(newState);
-  };
-
   // Copies window location to navigator clipboard
-  // @dev This only works in a secure context, i.e. HTTPS
   const handleCopyLink = () => {
     navigator.clipboard.writeText(window.location.href);
     setCopied(true);
@@ -123,6 +98,13 @@ const LobbyOverlay: React.FC<LobbyOverlayProps> = ({
   useEffect(() => {
     validateTurnConfig().then(setTurnConfigValid);
   }, []);
+
+  const handleStartMeeting = () => {
+    if (canStartMeeting) {
+      websocketService.send('startMeeting', { roomId });
+      onStartMeeting();
+    }
+  };
 
   if (!meetingStarted) {
     return (
@@ -139,8 +121,6 @@ const LobbyOverlay: React.FC<LobbyOverlayProps> = ({
             zIndex: 1200,
           }}
         >
-          {/* Debug Info Panel */}
-         
           <Paper
             elevation={0}
             sx={{
@@ -226,42 +206,22 @@ const LobbyOverlay: React.FC<LobbyOverlayProps> = ({
             {/* Device Controls and Status */}
             <Grid container spacing={3} mb={5}>
               <Grid item xs={12} md={4}>
-                <Paper
-                  elevation={0}
-                  sx={{
-                    p: 2,
-                    background: 'rgba(255, 255, 255, 0.02)',
-                    border: '1px solid rgba(255, 255, 255, 0.05)',
-                    borderRadius: '12px',
-                  }}
-                >
-                  <DeviceToggle
-                    enabled={isCameraEnabled}
-                    onToggle={handleCameraToggle}
-                    enabledIcon={VideocamIcon}
-                    disabledIcon={VideocamOffIcon}
-                    label="Camera"
-                  />
-                </Paper>
+                <DeviceToggle
+                  enabled={videoEnabled}
+                  onToggle={() => onCameraToggle(!videoEnabled)}
+                  enabledIcon={VideocamIcon}
+                  disabledIcon={VideocamOffIcon}
+                  label="Camera"
+                />
               </Grid>
               <Grid item xs={12} md={4}>
-                <Paper
-                  elevation={0}
-                  sx={{
-                    p: 2,
-                    background: 'rgba(255, 255, 255, 0.02)',
-                    border: '1px solid rgba(255, 255, 255, 0.05)',
-                    borderRadius: '12px',
-                  }}
-                >
-                  <DeviceToggle
-                    enabled={isMicrophoneEnabled}
-                    onToggle={handleMicrophoneToggle}
-                    enabledIcon={MicIcon}
-                    disabledIcon={MicOffIcon}
-                    label="Microphone"
-                  />
-                </Paper>
+                <DeviceToggle
+                  enabled={audioEnabled}
+                  onToggle={() => onMicrophoneToggle(!audioEnabled)}
+                  enabledIcon={MicIcon}
+                  disabledIcon={MicOffIcon}
+                  label="Microphone"
+                />
               </Grid>
               <Grid item xs={12} md={4}>
                 <Paper
@@ -303,7 +263,6 @@ const LobbyOverlay: React.FC<LobbyOverlayProps> = ({
                 )}
                 {participants.map((participant, index) => (
                   <ListItem
-                  // @ts-ignore
                     key={participant}
                     sx={{
                       borderBottom:
@@ -312,9 +271,7 @@ const LobbyOverlay: React.FC<LobbyOverlayProps> = ({
                           : 'none',
                     }}
                     secondaryAction={
-               
-                        <CheckIcon sx={{ color: 'success.main', fontSize: 22 }} />
-                      
+                      <CheckIcon sx={{ color: 'success.main', fontSize: 22 }} />
                     }
                   >
                     <ListItemText
@@ -347,7 +304,7 @@ const LobbyOverlay: React.FC<LobbyOverlayProps> = ({
                   variant="contained"
                   size="large"
                   disableElevation
-                  onClick={onStartMeeting}
+                  onClick={handleStartMeeting}
                   disabled={!canStartMeeting}
                   sx={{
                     minWidth: 200,
@@ -502,9 +459,7 @@ const LobbyOverlay: React.FC<LobbyOverlayProps> = ({
     );
   }
 
-  // Once the meeting is started we no longer need to show
-  // the overlay
   return null;
 };
 
-export default memo(LobbyOverlay)
+export default memo(LobbyOverlay);

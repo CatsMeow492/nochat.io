@@ -7,7 +7,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -40,59 +39,109 @@ func init() {
 }
 
 func handleConnection(w http.ResponseWriter, r *http.Request) {
-	if !strings.HasPrefix(r.URL.Path, "/ws") {
-		http.Error(w, "Not found", http.StatusNotFound)
-		return
-	}
-
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		log.Println("Error during connection upgrade:", err)
+		log.Printf("[ERROR] Failed to upgrade connection: %v", err)
 		return
 	}
 
-	roomID := r.URL.Query().Get("room_id")
-	room, err := roomManager.GetOrCreateRoom(roomID)
-	if err != nil {
-		log.Printf("Error getting or creating room: %v", err)
+	clientUUID := r.URL.Query().Get("user_id")
+	if clientUUID == "" {
+		log.Printf("[ERROR] No user_id provided in query parameters")
 		conn.Close()
 		return
 	}
 
-	providedUserID := r.URL.Query().Get("user_id")
-	var clientUUID string
-	if providedUserID != "" {
-		clientUUID = providedUserID
-	} else {
-		clientUUID = models.GenerateUniqueID()
+	log.Printf("[INFO] WebSocket connection established for client %s", r.RemoteAddr)
+
+	// Create a client with buffered channel
+	client := &models.Client{
+		UserID: clientUUID,
+		Conn:   conn,
+		Send:   make(chan []byte, 256),
+		Done:   make(chan struct{}),
 	}
 
-	client := room.AddClient(conn, clientUUID)
-	if client == nil {
-		log.Printf("Client could not be added to room: %s", roomID)
-		conn.Close()
-		return
-	}
-
-	go func() {
-		client.Send <- models.MarshalMessage("userID", roomID, clientUUID)
-
-		isInitiator := room.Initiator == client
-		client.Send <- models.MarshalMessage("initiatorStatus", roomID, isInitiator)
-
-		messageHandler.SendInitialRoomState(client, room)
-		messageHandler.BroadcastUserCount(room)
-		messageHandler.BroadcastUserList(room)
-	}()
-
-	go readPump(client, room)
+	// Start the write pump in a goroutine
 	go writePump(client)
 
-	<-client.Done
+	// Send initial userID message
+	log.Printf("[DEBUG] Sending initial userID message to client %s", clientUUID)
+	select {
+	case client.Send <- models.MarshalMessage("userID", "", clientUUID):
+		log.Printf("[DEBUG] Successfully sent initial userID message")
+	default:
+		log.Printf("[ERROR] Failed to send initial userID message - channel full")
+		close(client.Done)
+		return
+	}
 
-	room.RemoveClient(client)
+	// Handle first message to join room
+	_, message, err := client.Conn.ReadMessage()
+	if err != nil {
+		log.Printf("[ERROR] Failed to read initial message: %v", err)
+		close(client.Done)
+		return
+	}
+
+	var parsedMessage models.Message
+	if err := json.Unmarshal(message, &parsedMessage); err != nil {
+		log.Printf("[ERROR] Error parsing message: %v", err)
+		close(client.Done)
+		return
+	}
+
+	if parsedMessage.Type != "joinRoom" {
+		log.Printf("[ERROR] First message must be joinRoom, got: %s", parsedMessage.Type)
+		close(client.Done)
+		return
+	}
+
+	content, ok := parsedMessage.Content.(map[string]interface{})
+	if !ok {
+		log.Printf("[ERROR] Invalid joinRoom message content")
+		close(client.Done)
+		return
+	}
+
+	roomID, ok := content["roomId"].(string)
+	if !ok {
+		log.Printf("[ERROR] No roomId in joinRoom message")
+		close(client.Done)
+		return
+	}
+
+	// Get or create the room
+	room, err := roomManager.GetOrCreateRoom(roomID)
+	if err != nil {
+		log.Printf("[ERROR] Error getting/creating room: %v", err)
+		close(client.Done)
+		return
+	}
+
+	// Important: Keep using the same client instance
+	client.Room = room
+
+	// Update room's client map with our existing client instance
+	room.Mu.Lock()
+	room.Clients[clientUUID] = client
+	// Set initiator if this is the first client
+	if len(room.Clients) == 1 {
+		room.Initiator = client
+		log.Printf("[DEBUG] Set client %s as initiator for room %s (first client)", clientUUID, roomID)
+	}
+	room.Mu.Unlock()
+
+	log.Printf("[DEBUG] Client %s joined room %s successfully. Is initiator: %v",
+		clientUUID, roomID, room.Initiator == client)
+
+	// Send initial room state using the same client instance
+	messageHandler.SendInitialRoomState(client, room)
 	messageHandler.BroadcastUserCount(room)
 	messageHandler.BroadcastUserList(room)
+
+	// Start read pump and block until it's done
+	readPump(client, room)
 }
 
 func readPump(client *models.Client, room *models.Room) {
@@ -162,20 +211,8 @@ func readPump(client *models.Client, room *models.Room) {
 			log.Printf("Handling message type: %s, sending to message handler", parsedMessage.Type)
 			messageHandler.HandleMessage(parsedMessage, client, room)
 		case "startMeeting":
-			log.Printf("Broadcasting start meeting message to room %s", room.ID)
-			messageHandler.BroadcastToRoom(room, models.MarshalMessage("startMeeting", room.ID, true))
-
-			// Use GetTargetPeerIDs to maintain directional connections
-			sortedClients := room.GetSortedClients()
-			for _, client := range sortedClients {
-				peers := room.GetTargetPeerIDs(client.UserID)
-				if len(peers) > 0 {
-					createOfferMsg := models.MarshalMessage("createOffer", room.ID, map[string]interface{}{
-						"peers": peers,
-					})
-					client.Send <- createOfferMsg
-				}
-			}
+			log.Printf("Handling startMeeting message for room %s", room.ID)
+			messageHandler.HandleMessage(parsedMessage, client, room)
 		}
 
 	}
@@ -183,17 +220,54 @@ func readPump(client *models.Client, room *models.Room) {
 
 func writePump(client *models.Client) {
 	ticker := time.NewTicker(pingPeriod)
-	defer ticker.Stop()
+	defer func() {
+		ticker.Stop()
+		log.Printf("[DEBUG] WritePump stopped for client %s", client.UserID)
+		client.Conn.Close()
+	}()
 
 	for {
 		select {
 		case message, ok := <-client.Send:
+			log.Printf("[DEBUG] WritePump received message for client %s", client.UserID)
+
+			client.Conn.SetWriteDeadline(time.Now().Add(writeWait))
 			if !ok {
+				log.Printf("[DEBUG] Send channel closed for client %s", client.UserID)
+				client.Conn.WriteMessage(websocket.CloseMessage, []byte{})
 				return
 			}
-			client.Conn.WriteMessage(websocket.TextMessage, message)
+
+			w, err := client.Conn.NextWriter(websocket.TextMessage)
+			if err != nil {
+				log.Printf("[ERROR] Failed to get next writer for client %s: %v", client.UserID, err)
+				return
+			}
+
+			log.Printf("[DEBUG] Writing message to client %s: %s", client.UserID, string(message))
+			_, err = w.Write(message)
+			if err != nil {
+				log.Printf("[ERROR] Failed to write message for client %s: %v", client.UserID, err)
+				return
+			}
+
+			if err := w.Close(); err != nil {
+				log.Printf("[ERROR] Failed to close writer for client %s: %v", client.UserID, err)
+				return
+			}
+			log.Printf("[DEBUG] Successfully wrote message to client %s", client.UserID)
+
 		case <-ticker.C:
-			client.Conn.WriteMessage(websocket.PingMessage, nil)
+			client.Conn.SetWriteDeadline(time.Now().Add(writeWait))
+			if err := client.Conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+				log.Printf("[ERROR] Failed to write ping message for client %s: %v", client.UserID, err)
+				return
+			}
+			log.Printf("[DEBUG] Sent ping to client %s", client.UserID)
+
+		case <-client.Done:
+			log.Printf("[DEBUG] Client %s done, stopping writePump", client.UserID)
+			return
 		}
 	}
 }

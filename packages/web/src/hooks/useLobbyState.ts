@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
-import { subscribeToMessages } from '../services/websocket';
+import websocketService from '../services/websocket';
+import { useMediaStore } from '../store/mediaStore';
 
 interface UseLobbyStateProps {
   roomId: string | undefined;
@@ -12,37 +13,73 @@ export const useLobbyState = ({ roomId, userId, initialIsInitiator }: UseLobbySt
   const [userCount, setUserCount] = useState<number>(0);
   const [isInitiator, setIsInitiator] = useState<boolean>(initialIsInitiator);
   const [meetingStarted, setMeetingStarted] = useState(false);
+  
+  // Get media state from store
+  const { mediaReady } = useMediaStore();
 
   useEffect(() => {
     if (!roomId) return;
 
-    const handleMessage = (message: any) => {
-        if (message.type === 'userList' || message.type === 'userCount' || message.type === 'initiatorStatus' || message.type === 'startMeeting') {
-            console.log('Lobby handling message:', message);
-        }
-      
-      if (message.type === 'userList' && message.content) {
-        const participantList = message.content.users || [];
-        setParticipants(participantList);
-        console.log('Updated participants:', participantList);
-      } else if (message.type === 'userCount') {
-        setUserCount(parseInt(message.content));
-      } else if (message.type === 'initiatorStatus') {
-        console.log('Setting initiator status:', message.content);
-        setIsInitiator(message.content);
-      } else if (message.type === 'startMeeting') {
-        setMeetingStarted(true);
+    // Send joinRoom message when component mounts
+    websocketService.send('joinRoom', { roomId });
+
+    const handleMessage = (type: string, content: any) => {
+      switch (type) {
+        case 'userList':
+          if (content && content.users) {
+            setParticipants(content.users);
+          }
+          break;
+        case 'userCount':
+          const count = parseInt(content, 10);
+          if (!isNaN(count)) {
+            setUserCount(count);
+          }
+          break;
+        case 'initiatorStatus':
+          console.log('[useLobbyState] Received initiatorStatus:', content);
+          const newIsInitiator = content === true || content === 'true';
+          console.log('[useLobbyState] Setting isInitiator to:', newIsInitiator);
+          setIsInitiator(newIsInitiator);
+          break;
+        case 'startMeeting':
+          setMeetingStarted(true);
+          break;
       }
     };
 
-    const unsubscribe = subscribeToMessages(handleMessage);
-    return () => unsubscribe();
+    // Subscribe to relevant message types
+    const unsubscribers = [
+      websocketService.subscribe('userList', (content) => handleMessage('userList', content)),
+      websocketService.subscribe('userCount', (content) => handleMessage('userCount', content)),
+      websocketService.subscribe('initiatorStatus', (content) => handleMessage('initiatorStatus', content)),
+      websocketService.subscribe('startMeeting', (content) => handleMessage('startMeeting', content))
+    ];
+
+    // Cleanup subscriptions when unmounting
+    return () => {
+      unsubscribers.forEach(unsubscribe => unsubscribe());
+      if (roomId) {
+        websocketService.send('leaveRoom', { roomId });
+      }
+    };
   }, [roomId]);
+
+  // Log state changes including media ready state
+  useEffect(() => {
+    console.log('Lobby state updated:', {
+      mediaReady,
+      isInitiator,
+      participantsCount: participants.length,
+      canStartMeeting: isInitiator && mediaReady && participants.length > 0
+    });
+  }, [mediaReady, isInitiator, participants]);
 
   return {
     participants,
     userCount,
-    userId,
-    meetingStarted
+    isInitiator,
+    meetingStarted,
+    mediaReady
   };
 };
