@@ -205,8 +205,7 @@ const setupPeerConnection = async (peerId: string, deps: MessageHandlerDependenc
 };
 
 const handleOffer = async (content: OfferContent, deps: MessageHandlerDependencies) => {
-    const { sdp, fromPeerId, fromPeerID } = content;
-    const peerId = fromPeerId || fromPeerID;
+    const { sdp, fromPeerId: peerId } = content;
     
     if (!peerId) {
         logMsg('ERROR', 'No peer ID in offer');
@@ -214,75 +213,50 @@ const handleOffer = async (content: OfferContent, deps: MessageHandlerDependenci
     }
 
     logMsg('OFFER', `Handling offer from ${peerId}`);
-
-    // Create or get peer connection
     let peerConn = deps.peerConnections.get(peerId);
-    if (!peerConn) {
-        logMsg('ICE', `Setting up new peer connection for ${peerId}`);
-        const newPc = await setupPeerConnection(peerId, deps);
-        peerConn = createPeerConnection(peerId, newPc);
-        
-        // Add ICE gathering state logging
-        newPc.onicegatheringstatechange = () => {
-            logMsg('ICE', `Gathering state for ${peerId}: ${newPc.iceGatheringState}`);
-        };
-        
-        deps.peerConnections.set(peerId, peerConn);
-    }
-
-    if (!peerConn) {
-        logMsg('ERROR', `Failed to create peer connection for ${peerId}`);
-        return;
-    }
 
     try {
+        // Create or get peer connection
+        if (!peerConn) {
+            logMsg('ICE', `Setting up new peer connection for ${peerId}`);
+            const newPc = await setupPeerConnection(peerId, deps);
+            peerConn = createPeerConnection(peerId, newPc);
+            deps.peerConnections.set(peerId, peerConn);
+        }
+
+        const pc = peerConn.connection;
+
+        // Set remote description
         logMsg('SDP', `Setting remote description for ${peerId}`);
-        await peerConn.connection.setRemoteDescription(new RTCSessionDescription(sdp));
+        await pc.setRemoteDescription(new RTCSessionDescription(sdp));
+        logMsg('SIGNAL', `Signaling state for ${peerId}: ${pc.signalingState}`);
+
+        // Create and set local description (answer)
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
         
-        // Process any queued candidates
-        const queue = iceCandidateQueues.get(peerId);
-        if (queue) {
-            logMsg('ICE', `Processing ${queue.candidates.length} queued candidates for ${peerId}`);
-            for (const candidate of queue.candidates) {
-                await peerConn.connection.addIceCandidate(candidate);
-                logMsg('ICE', `Added queued candidate for ${peerId}: ${candidate.candidate?.slice(0, 50)}...`);
-            }
-            iceCandidateQueues.delete(peerId);
-        }
+        // Process any queued candidates now that we have both descriptions
+        await processQueuedCandidates(pc, peerId);
 
-        // Add local tracks before creating answer
-        const mediaStore = useMediaStore.getState();
-        const localStream = mediaStore.localStream;
-        
-        const currentPeerConn = peerConn;
-        if (localStream) {
-            logMsg('TRACK', `Adding local tracks to peer ${peerId}`);
-            localStream.getTracks().forEach(track => {
-                if (!currentPeerConn.connection.getSenders().find(s => s.track?.id === track.id)) {
-                    currentPeerConn.connection.addTrack(track, localStream);
-                    logMsg('TRACK', `Added local ${track.kind} track to peer ${peerId}`);
-                }
-            });
-        }
-
-        // Create and send answer
-        logMsg('SDP', `Creating answer for ${peerId}`);
-        const answer = await peerConn.connection.createAnswer();
-        logMsg('SDP', `Setting local description for ${peerId}`);
-        await peerConn.connection.setLocalDescription(answer);
-        logMsg('ICE', `ICE gathering starting for ${peerId}`);
-
+        // Send answer
         deps.sendMessage('answer', {
-            targetPeerID: peerId,
+            sdp: answer,
             fromPeerID: deps.getState().userId,
-            sdp: answer
+            targetPeerID: peerId
         });
         logMsg('ANSWER', `Sent answer to ${peerId}`);
-
-    } catch (error) {
-        logMsg('ERROR', `Failed to handle offer from ${peerId}: ${error}`);
-        peerConn.connectionState = PeerConnectionState.FAILED;
+        
+        // Update connection state
+        peerConn.connectionState = pc.connectionState as PeerConnectionState;
         deps.peerConnections.set(peerId, peerConn);
+        logMsg('STATE', `Peer ${peerId} connection state: ${pc.connectionState}`);
+
+    } catch (err) {
+        logMsg('ERROR', `Failed to handle offer from ${peerId}: ${err}`);
+        if (peerConn) {
+            peerConn.connectionState = PeerConnectionState.FAILED;
+            deps.peerConnections.set(peerId, peerConn);
+        }
     }
 };
 
@@ -368,25 +342,43 @@ const getIceServers = async () => {
 };
 
 const processQueuedCandidates = async (pc: RTCPeerConnection, peerId: string) => {
-    if (!pc.remoteDescription) {
-        logMsg('ICE', `Skipping candidate processing - no remote description yet for ${peerId}`);
+    const queue = iceCandidateQueues.get(peerId);
+    if (!queue || queue.candidates.length === 0) {
+        logMsg('ICE', `No queued candidates for ${peerId}`);
         return;
     }
 
-    const candidates = iceCandidateQueues.get(peerId)?.candidates || [];
-    logMsg('ICE', `Processing ${candidates.length} queued candidates for ${peerId}`);
+    logMsg('ICE', `Processing ${queue.candidates.length} queued candidates for ${peerId}`);
     
-    if (candidates.length > 0) {
-        for (const candidate of candidates) {
-            try {
-                await pc.addIceCandidate(candidate);
-                logMsg('ICE', `Added queued candidate for ${peerId}`);
-            } catch (error) {
-                logMsg('ERROR', `Failed to add ICE candidate: ${error}`);
-            }
-        }
-        iceCandidateQueues.delete(peerId);
+    // Ensure we have both local and remote descriptions
+    if (pc.remoteDescription === null || pc.localDescription === null) {
+        logMsg('ICE', `Waiting for descriptions before processing candidates for ${peerId}`);
+        queue.hasRemoteDescription = false;
+        return;
     }
+
+    queue.hasRemoteDescription = true;
+    let successCount = 0;
+
+    for (const candidate of queue.candidates) {
+        try {
+            await pc.addIceCandidate(new RTCIceCandidate(candidate));
+            successCount++;
+            queue.processedCount++;
+            logMsg('ICE', `Successfully added candidate ${queue.processedCount} for ${peerId}`);
+        } catch (error) {
+            logMsg('ERROR', `Failed to add ICE candidate for ${peerId}: ${error}`);
+        }
+    }
+
+    // Update queue state
+    queue.candidates = [];
+    queue.lastUpdated = Date.now();
+    queue.connectionState = pc.iceConnectionState;
+    queue.gatheringState = pc.iceGatheringState;
+    iceCandidateQueues.set(peerId, queue);
+
+    logMsg('ICE', `Processed ${successCount}/${queue.processedCount} candidates for ${peerId}`);
 };
 
 const retryIceConnection = async (pc: RTCPeerConnection, peerId: string, deps: MessageHandlerDependencies, attempt = 0) => {
@@ -430,57 +422,60 @@ const handleIceCandidate = async (content: IceCandidateContent, deps: MessageHan
         return;
     }
 
-    // Get or create the queue for this peer
-    if (!iceCandidateQueues.has(fromPeerId)) {
-        iceCandidateQueues.set(fromPeerId, {
-            candidates: [],
-            hasRemoteDescription: false,
-            createdAt: Date.now(),
-            lastUpdated: Date.now(),
-            processedCount: 0,
-            connectionState: undefined,
-            gatheringState: undefined
-        });
-    }
-    
-    const queue = iceCandidateQueues.get(fromPeerId)!;
-    
-    // Get the peer connection if it exists
     const peerConn = deps.peerConnections.get(fromPeerId);
     
-    if (!peerConn || !peerConn.connection.remoteDescription) {
-        // Queue the candidate if we don't have a connection or remote description yet
-        logMsg('ICE', `Queueing candidate for ${fromPeerId}`);
+    if (!peerConn) {
+        // Queue the candidate if we don't have a connection yet
+        if (!iceCandidateQueues.has(fromPeerId)) {
+            iceCandidateQueues.set(fromPeerId, {
+                candidates: [],
+                lastUpdated: Date.now(),
+                createdAt: Date.now(),
+                processedCount: 0,
+                hasRemoteDescription: false,
+                connectionState: undefined,
+                gatheringState: undefined
+            });
+        }
+        const queue = iceCandidateQueues.get(fromPeerId)!;
         queue.candidates.push(candidate);
-        queue.lastUpdated = Date.now();
-        iceCandidateQueues.set(fromPeerId, queue);
+        logMsg('ICE', `Queued candidate for ${fromPeerId} - waiting for peer connection`);
         return;
     }
 
-    // Update queue state
-    queue.hasRemoteDescription = true;
-    iceCandidateQueues.set(fromPeerId, queue);
+    // If we have a connection but no remote description, queue the candidate
+    if (!peerConn.connection.remoteDescription || !peerConn.connection.localDescription) {
+        if (!iceCandidateQueues.has(fromPeerId)) {
+            iceCandidateQueues.set(fromPeerId, {
+                candidates: [],
+                lastUpdated: Date.now(),
+                createdAt: Date.now(),
+                processedCount: 0,
+                hasRemoteDescription: false,
+                connectionState: peerConn.connection.iceConnectionState,
+                gatheringState: peerConn.connection.iceGatheringState
+            });
+        }
+        const queue = iceCandidateQueues.get(fromPeerId)!;
+        queue.candidates.push(candidate);
+        logMsg('ICE', `Queued candidate for ${fromPeerId} - waiting for descriptions`);
+        return;
+    }
 
+    // If we have everything we need, add the candidate immediately
     try {
-        // If we have a connection with remote description, add the candidate immediately
         await peerConn.connection.addIceCandidate(new RTCIceCandidate(candidate));
-        logMsg('ICE', `Added candidate from ${fromPeerId}`);
+        logMsg('ICE', `Added candidate for ${fromPeerId}`);
     } catch (error) {
-        logMsg('ERROR', `Failed to add ICE candidate from ${fromPeerId}: ${error}`);
+        logMsg('ERROR', `Failed to add ICE candidate for ${fromPeerId}: ${error}`);
     }
 };
 
 const updateConnectionState = (peerId: string, state: PeerConnectionState, deps: MessageHandlerDependencies) => {
-    const conn = deps.peerConnections.get(peerId);
-    if (conn) {
-        conn.connectionState = state;
-        deps.peerConnections.set(peerId, conn);
-        
-        // Update global connection state
-        if (state === PeerConnectionState.CONNECTED) {
-            deps.setState.setHasEstablishedConnection(true);
-        }
-        
+    const peerConn = deps.peerConnections.get(peerId);
+    if (peerConn) {
+        peerConn.connectionState = state;
+        deps.peerConnections.set(peerId, peerConn);
         logMsg('STATE', `Peer ${peerId} connection state: ${state}`);
     }
 };
