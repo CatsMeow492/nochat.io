@@ -1,6 +1,6 @@
 import './index.css';
 
-import React, { useEffect, useCallback, useMemo } from 'react';
+import React, { useEffect, useCallback, useMemo, useState } from 'react';
 import { CssBaseline } from '@mui/material';
 import { ThemeProvider } from '@mui/material/styles';
 import { RouterProvider } from 'react-router-dom';
@@ -47,7 +47,33 @@ function App() {
     }
   };
 
-  // Create message handler instance
+  // Add state for ICE servers
+  const [iceServers, setIceServers] = useState<RTCIceServer[]>([
+    { urls: 'stun:stun.l.google.com:19302' } // Default STUN server while loading
+  ]);
+
+  // Fetch ICE servers on mount and initialize WebSocket service
+  useEffect(() => {
+    const fetchIceServers = async () => {
+      try {
+        const url = 'https://nochat.io/api/ice-servers';
+        const response = await fetch(url);
+        if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+        const data = await response.json();
+        setIceServers(data.iceServers);
+        websocketService.setIceServers(data.iceServers);
+        console.log('[ICE] Servers initialized:', data.iceServers);
+      } catch (error) {
+        console.error('[ICE] Failed to fetch servers:', error);
+        // Keep using default STUN server
+        websocketService.setIceServers(iceServers);
+      }
+    };
+
+    fetchIceServers();
+  }, []);
+
+  // Create message handler instance with iceServers
   const messageHandler = useMemo(() => createMessageHandler({
     log: (message: string) => console.log(message),
     sendMessage: (type: string, content: any) => {
@@ -67,6 +93,7 @@ function App() {
       remoteStreams: new Map(),
       activePeers: new Set(),
       peerConnections: new Map(),
+      iceServers,
       rtcConfig: {},
       offerQueue: new Map(),
       iceCandidateQueue: new Map()
@@ -88,6 +115,7 @@ function App() {
       setOfferQueue: () => {},
       setIceCandidateQueue: () => {}
     },
+    iceServers,
     peerConnections: new Map(),
     summarizeSDP: (sdp: string) => sdp,
     setWindowState: (state: string) => {
@@ -97,7 +125,7 @@ function App() {
     activePeers: new Set(),
     checkPeerConnections: () => {},
     renegotiatePeerConnection: () => {}
-  }), []);
+  }), [iceServers]);
 
   // Establish WebSocket connection when user is logged in
   const connectWebSocket = useCallback(() => {

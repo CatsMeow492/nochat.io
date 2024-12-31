@@ -41,21 +41,39 @@ interface LobbyOverlayProps {
 }
 
 const LobbyOverlay: React.FC<LobbyOverlayProps> = ({
-  isInitiator: propIsInitiator,
+  isInitiator,
   meetingStarted,
   onStartMeeting,
-  participants: propParticipants,
   userId,
   roomId,
   onReadyChange,
   onCameraToggle,
-  onMicrophoneToggle,
-}) => {
-  const { participants, userCount, isInitiator, mediaReady } = useLobbyState({
-    roomId,
-    userId,
-    initialIsInitiator: propIsInitiator,
-  });
+  onMicrophoneToggle
+}: LobbyOverlayProps) => {
+  const [participants, setParticipants] = useState<string[]>([]);
+  const { mediaReady } = useMediaStore();
+  
+  useEffect(() => {
+    // Subscribe to WebSocket state changes
+    const unsubscribe = websocketService.subscribe('stateChange', (state) => {
+      if (state.activePeers) {
+        setParticipants(Array.from(state.activePeers));
+      }
+    });
+
+    // Also subscribe to userList messages directly
+    const unsubscribeUserList = websocketService.subscribe('userList', (content) => {
+      if (content && Array.isArray(content.users)) {
+        setParticipants(content.users);
+        console.log('Updated participants:', content.users);
+      }
+    });
+
+    return () => {
+      unsubscribe();
+      unsubscribeUserList();
+    };
+  }, []);
 
   // Get media state from store
   const { audioEnabled, videoEnabled } = useMediaStore();

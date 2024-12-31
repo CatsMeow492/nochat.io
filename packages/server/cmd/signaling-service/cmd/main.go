@@ -211,20 +211,8 @@ func readPump(client *models.Client, room *models.Room) {
 			log.Printf("Handling message type: %s, sending to message handler", parsedMessage.Type)
 			messageHandler.HandleMessage(parsedMessage, client, room)
 		case "startMeeting":
-			log.Printf("Broadcasting start meeting message to room %s", room.ID)
-			messageHandler.BroadcastToRoom(room, models.MarshalMessage("startMeeting", room.ID, true))
-
-			// Use GetTargetPeerIDs to maintain directional connections
-			sortedClients := room.GetSortedClients()
-			for _, client := range sortedClients {
-				peers := room.GetTargetPeerIDs(client.UserID)
-				if len(peers) > 0 {
-					createOfferMsg := models.MarshalMessage("createOffer", room.ID, map[string]interface{}{
-						"peers": peers,
-					})
-					client.Send <- createOfferMsg
-				}
-			}
+			log.Printf("Handling startMeeting message for room %s", room.ID)
+			messageHandler.HandleMessage(parsedMessage, client, room)
 		}
 
 	}

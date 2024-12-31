@@ -75,9 +75,12 @@ func (h *MessageHandler) handleReady(msg models.Message, client *models.Client, 
 func (h *MessageHandler) handleOffer(msg models.Message, client *models.Client, room *models.Room) {
 	content, ok := msg.Content.(map[string]interface{})
 	if !ok {
-		log.Printf("Error: offer content is not a map")
+		log.Printf("[OFFER:ERROR] Content is not a map: %T", msg.Content)
 		return
 	}
+
+	// Log all available keys in content for debugging
+	log.Printf("[OFFER:DEBUG] Available content keys: %v", getKeys(content))
 
 	// Check both possible property names
 	var targetPeerID string
@@ -88,29 +91,39 @@ func (h *MessageHandler) handleOffer(msg models.Message, client *models.Client, 
 	} else if id, ok := content["targetPeer"].(string); ok {
 		targetPeerID = id
 	} else {
-		log.Printf("Error: targetPeerID/targetPeerId not found in offer. Available keys: %v", getKeys(content))
+		log.Printf("[OFFER:ERROR] targetPeerID not found. Available keys: %v", getKeys(content))
 		return
 	}
 
-	// Validate SDP exists and log concise info
-	if sdp, ok := content["sdp"].(map[string]interface{}); ok {
-		if sdpStr, ok := sdp["sdp"].(string); ok {
-			log.Printf("[OFFER] SDP validation: %s", truncateSDP(sdpStr))
-		}
+	// Validate SDP exists and log detailed info
+	sdpContent, hasSDP := content["sdp"].(map[string]interface{})
+	if !hasSDP {
+		log.Printf("[OFFER:ERROR] Missing or invalid SDP for peer %s. SDP type: %T", targetPeerID, content["sdp"])
+		return
 	}
+
+	sdpStr, hasSDPString := sdpContent["sdp"].(string)
+	if !hasSDPString {
+		log.Printf("[OFFER:ERROR] Invalid SDP string for peer %s. Available SDP keys: %v", targetPeerID, getKeys(sdpContent))
+		return
+	}
+
+	// Log SDP validation details
+	log.Printf("[OFFER:DEBUG] SDP validation for peer %s:", targetPeerID)
+	log.Printf("  - Has m=audio: %v", strings.Contains(sdpStr, "m=audio"))
+	log.Printf("  - Has m=video: %v", strings.Contains(sdpStr, "m=video"))
+	log.Printf("  - SDP length: %d bytes", len(sdpStr))
+	log.Printf("  - First line: %s", strings.Split(sdpStr, "\n")[0])
 
 	content["fromPeerID"] = client.UserID
 
 	// Store the offer state before forwarding
 	room.StoreSignalingState(targetPeerID, client.UserID, "offer", content)
 
-	// Check for any queued answers
-	queuedAnswers := room.GetAndClearQueuedAnswers(targetPeerID, client.UserID)
-
 	// Forward the offer
 	targetPeer, exists := room.Clients[targetPeerID]
 	if !exists {
-		log.Printf("Target peer %s not found in room", targetPeerID)
+		log.Printf("[OFFER:ERROR] Target peer %s not found in room", targetPeerID)
 		return
 	}
 
@@ -122,23 +135,26 @@ func (h *MessageHandler) handleOffer(msg models.Message, client *models.Client, 
 
 	messageBytes, err := json.Marshal(offerMsg)
 	if err != nil {
-		log.Printf("Error marshaling offer message: %v", err)
+		log.Printf("[OFFER:ERROR] Failed to marshal offer message: %v", err)
 		return
 	}
 
-	log.Printf("[OFFER] from:%s to:%s room:%s", client.UserID[:8], targetPeerID[:8], room.ID)
+	log.Printf("[OFFER:INFO] Forwarding offer from %s to %s in room %s",
+		client.UserID[:8], targetPeerID[:8], room.ID)
 	targetPeer.Send <- messageBytes
 
-	if len(queuedAnswers) > 0 {
-		log.Printf("[OFFER] Processing %d queued answers for peer %s", len(queuedAnswers), targetPeerID[:8])
-		for _, answer := range queuedAnswers {
-			answerMsg := models.Message{
-				Type:    "answer",
+	// Send any queued ICE candidates now that the offer is processed
+	queuedCandidates := room.GetQueuedCandidates(targetPeerID, client.UserID)
+	if len(queuedCandidates) > 0 {
+		log.Printf("[OFFER:INFO] Sending %d queued ICE candidates to %s", len(queuedCandidates), targetPeerID[:8])
+		for _, candidateContent := range queuedCandidates {
+			iceMsg := models.Message{
+				Type:    "iceCandidate",
 				RoomID:  room.ID,
-				Content: answer,
+				Content: candidateContent,
 			}
-			if answerBytes, err := json.Marshal(answerMsg); err == nil {
-				client.Send <- answerBytes
+			if messageBytes, err := json.Marshal(iceMsg); err == nil {
+				targetPeer.Send <- messageBytes
 			}
 		}
 	}
@@ -211,9 +227,12 @@ func (h *MessageHandler) handleAnswer(msg models.Message, client *models.Client,
 func (h *MessageHandler) handleICECandidate(msg models.Message, client *models.Client, room *models.Room) {
 	content, ok := msg.Content.(map[string]interface{})
 	if !ok {
-		log.Printf("[ICE] Invalid content")
+		log.Printf("[ICE:ERROR] Invalid content type: %T", msg.Content)
 		return
 	}
+
+	// Log all available keys for debugging
+	log.Printf("[ICE:DEBUG] Available content keys: %v", getKeys(content))
 
 	// Check for target peer ID in various formats
 	var targetPeerID string
@@ -226,20 +245,38 @@ func (h *MessageHandler) handleICECandidate(msg models.Message, client *models.C
 	}
 
 	if targetPeerID == "" {
-		log.Printf("[ICE] Missing target. Available keys: %v", getKeys(content))
+		log.Printf("[ICE:ERROR] Missing target peer ID. Available keys: %v", getKeys(content))
 		return
 	}
 
 	// Prevent self-targeting of ICE candidates
 	if targetPeerID == client.UserID {
-		log.Printf("[ICE] Skipping self-targeted candidate from %s", client.UserID[:8])
+		log.Printf("[ICE:SKIP] Ignoring self-targeted candidate from %s", client.UserID[:8])
 		return
 	}
 
 	// Add fromPeerId to content
 	content["fromPeerId"] = client.UserID
 
-	log.Printf("[ICE] Content: from=%s, target=%s", client.UserID[:8], targetPeerID[:8])
+	// Check if we have a valid signaling state for this peer
+	if !room.HasPendingOffer(targetPeerID, client.UserID) {
+		log.Printf("[ICE:QUEUE] No pending offer found for peer %s -> %s, queueing candidate",
+			client.UserID[:8], targetPeerID[:8])
+		room.QueueICECandidate(targetPeerID, client.UserID, content)
+		return
+	}
+
+	// Validate candidate structure
+	candidate, ok := content["candidate"].(map[string]interface{})
+	if !ok {
+		log.Printf("[ICE:ERROR] Invalid candidate structure: %T", content["candidate"])
+		return
+	}
+
+	log.Printf("[ICE:DEBUG] Candidate details for %s -> %s:", client.UserID[:8], targetPeerID[:8])
+	log.Printf("  - Type: %v", candidate["type"])
+	log.Printf("  - Protocol: %v", candidate["protocol"])
+	log.Printf("  - Foundation: %v", candidate["foundation"])
 
 	iceMsg := models.Message{
 		Type:    "iceCandidate",
@@ -248,11 +285,15 @@ func (h *MessageHandler) handleICECandidate(msg models.Message, client *models.C
 	}
 
 	if targetPeer, exists := room.Clients[targetPeerID]; exists {
-		messageBytes, _ := json.Marshal(iceMsg)
+		messageBytes, err := json.Marshal(iceMsg)
+		if err != nil {
+			log.Printf("[ICE:ERROR] Failed to marshal ICE message: %v", err)
+			return
+		}
 		targetPeer.Send <- messageBytes
-		log.Printf("[ICE] Forwarded from %s to %s", client.UserID[:8], targetPeerID[:8])
+		log.Printf("[ICE:INFO] Forwarded candidate from %s to %s", client.UserID[:8], targetPeerID[:8])
 	} else {
-		log.Printf("[ICE] Target peer not found: %s", targetPeerID[:8])
+		log.Printf("[ICE:ERROR] Target peer not found: %s", targetPeerID[:8])
 	}
 }
 

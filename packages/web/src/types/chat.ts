@@ -51,6 +51,7 @@ export interface MessageHandlerDependencies {
   renegotiatePeerConnection: (peerId: string) => void;
   activePeers: Set<string>;
   checkPeerConnections: (peerIds: string[]) => void;
+  iceServers: RTCIceServer[];
 }
 
 export interface WebSocketMessage {
@@ -87,6 +88,7 @@ export interface OfferContent {
   fromPeerID?: string;
   targetPeerId?: string;
   targetPeerID?: string;
+  fromPeer?: string;
 }
 
 export interface IceCandidateContent {
@@ -121,7 +123,9 @@ export enum PeerConnectionState {
     CONNECTED = 'connected',        // ICE connection established
     READY = 'ready',               // Media tracks received and ready
     FAILED = 'failed',             // Connection failed
-    CLOSED = 'closed'              // Connection closed
+    CLOSED = 'closed',             // Connection closed
+    OFFER_RECEIVED = 'offer_received',    // Received offer, waiting for answer
+    ANSWER_RECEIVED = 'answer_received'   // Received answer, ready for ICE
 }
 
 export interface PeerConnection {

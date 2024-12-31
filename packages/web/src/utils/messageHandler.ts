@@ -80,7 +80,7 @@ const ensureLocalMedia = async (deps: MessageHandlerDependencies) => {
 
 const setupPeerConnection = async (peerId: string, deps: MessageHandlerDependencies): Promise<RTCPeerConnection> => {
     const pc = new RTCPeerConnection({
-        iceServers: await getIceServers(),
+        iceServers: deps.iceServers,
         iceTransportPolicy: 'all',
         bundlePolicy: 'balanced',
         iceCandidatePoolSize: 1
@@ -89,7 +89,7 @@ const setupPeerConnection = async (peerId: string, deps: MessageHandlerDependenc
     const peerConn = createPeerConnection(peerId, pc);
     deps.peerConnections.set(peerId, peerConn);
 
-    // Add local tracks immediately
+    // Add local tracks immediately from MediaStore
     const mediaStore = useMediaStore.getState();
     const localStream = mediaStore.localStream;
     if (localStream) {
@@ -186,11 +186,12 @@ const setupPeerConnection = async (peerId: string, deps: MessageHandlerDependenc
         
         deps.peerConnections.set(peerId, conn);
         
-        // Log track addition
-        console.log(`[TRACK] Added ${kind} track to MediaStore for peer ${peerId}`, {
+        // Enhanced logging
+        logMsg('TRACK', `Added ${kind} track from ${peerId}`, {
             trackId: event.track.id,
             readyState: event.track.readyState,
-            enabled: event.track.enabled
+            enabled: event.track.enabled,
+            streamId: event.streams[0]?.id
         });
     };
 
@@ -205,7 +206,8 @@ const setupPeerConnection = async (peerId: string, deps: MessageHandlerDependenc
 };
 
 const handleOffer = async (content: OfferContent, deps: MessageHandlerDependencies) => {
-    const { sdp, fromPeerId: peerId } = content;
+    const peerId = content.fromPeerID || content.fromPeerId || content.fromPeer;
+    const sdp = content.sdp;
     
     if (!peerId) {
         logMsg('ERROR', 'No peer ID in offer');
@@ -213,51 +215,76 @@ const handleOffer = async (content: OfferContent, deps: MessageHandlerDependenci
     }
 
     logMsg('OFFER', `Handling offer from ${peerId}`);
-    let peerConn = deps.peerConnections.get(peerId);
-
+    
     try {
-        // Create or get peer connection
-        if (!peerConn) {
-            logMsg('ICE', `Setting up new peer connection for ${peerId}`);
-            const newPc = await setupPeerConnection(peerId, deps);
-            peerConn = createPeerConnection(peerId, newPc);
-            deps.peerConnections.set(peerId, peerConn);
-        }
+        // Use setupPeerConnection instead of creating connection directly
+        const pc = await setupPeerConnection(peerId, deps);
+        
+        // Set remote description (the offer)
+        const remoteDesc = new RTCSessionDescription({
+            type: 'offer',
+            sdp: typeof sdp === 'string' ? sdp : sdp.sdp
+        });
+        
+        await pc.setRemoteDescription(remoteDesc);
+        logMsg('SDP', `Remote description set for ${peerId}`);
 
-        const pc = peerConn.connection;
-
-        // Set remote description
-        logMsg('SDP', `Setting remote description for ${peerId}`);
-        await pc.setRemoteDescription(new RTCSessionDescription(sdp));
-        logMsg('SIGNAL', `Signaling state for ${peerId}: ${pc.signalingState}`);
-
-        // Create and set local description (answer)
+        // Create and set local description (the answer)
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
         
-        // Process any queued candidates now that we have both descriptions
-        await processQueuedCandidates(pc, peerId);
-
         // Send answer
         deps.sendMessage('answer', {
             sdp: answer,
             fromPeerID: deps.getState().userId,
-            targetPeerID: peerId
+            targetPeerID: peerId,
+            type: 'answer'
         });
-        logMsg('ANSWER', `Sent answer to ${peerId}`);
         
-        // Update connection state
-        peerConn.connectionState = pc.connectionState as PeerConnectionState;
-        deps.peerConnections.set(peerId, peerConn);
-        logMsg('STATE', `Peer ${peerId} connection state: ${pc.connectionState}`);
+        // Process any queued candidates
+        await processQueuedCandidates(pc, peerId);
 
     } catch (err) {
         logMsg('ERROR', `Failed to handle offer from ${peerId}: ${err}`);
-        if (peerConn) {
-            peerConn.connectionState = PeerConnectionState.FAILED;
-            deps.peerConnections.set(peerId, peerConn);
+        const failedConn = deps.peerConnections.get(peerId);
+        if (failedConn) {
+            failedConn.connection.close();
+            deps.peerConnections.delete(peerId);
         }
     }
+};
+
+// Separate function for setting up event handlers and tracks
+const setupPeerConnectionHandlers = async (
+    pc: RTCPeerConnection, 
+    peerId: string, 
+    deps: MessageHandlerDependencies
+) => {
+    // Add local tracks
+    const mediaStore = useMediaStore.getState();
+    const localStream = mediaStore.localStream;
+    if (localStream) {
+        localStream.getTracks().forEach(track => {
+            pc.addTrack(track, localStream);
+            logMsg('TRACK', `Added ${track.kind} track to peer connection ${peerId}`);
+        });
+    }
+
+    // Set up event handlers
+    pc.onicecandidate = (event) => {
+        if (event.candidate) {
+            deps.sendMessage('iceCandidate', {
+                candidate: event.candidate,
+                fromPeerId: deps.getState().userId,
+                targetPeerId: peerId
+            });
+            logMsg('ICE', `Sent candidate to ${peerId}`);
+        }
+    };
+
+    // Store the connection
+    const peerConn = createPeerConnection(peerId, pc);
+    deps.peerConnections.set(peerId, peerConn);
 };
 
 const handleAnswer = async (content: AnswerContent, deps: MessageHandlerDependencies) => {
@@ -273,7 +300,7 @@ const handleAnswer = async (content: AnswerContent, deps: MessageHandlerDependen
         logMsg('ERROR', `No connection found for peer ${peerId}`);
         return;
     }
-    
+
     try {
         // 1. Validate signaling state
         if (pc.connection.signalingState === 'stable') {
@@ -326,7 +353,7 @@ const getIceServers = async () => {
         const url = 'https://nochat.io/api/ice-servers';
         logMsg('[ICE]', `Fetching from URL: ${url}`);
         const response = await fetch(url);
-        
+
         if (!response.ok) {
             throw new Error(`HTTP error! status: ${response.status}`);
         }
@@ -349,39 +376,34 @@ const processQueuedCandidates = async (pc: RTCPeerConnection, peerId: string) =>
     }
 
     logMsg('ICE', `Processing ${queue.candidates.length} queued candidates for ${peerId}`);
-    
-    // Ensure we have both local and remote descriptions
-    if (pc.remoteDescription === null || pc.localDescription === null) {
-        logMsg('ICE', `Waiting for descriptions before processing candidates for ${peerId}`);
-        queue.hasRemoteDescription = false;
-        return;
-    }
-
-    queue.hasRemoteDescription = true;
     let successCount = 0;
 
     for (const candidate of queue.candidates) {
         try {
             await pc.addIceCandidate(new RTCIceCandidate(candidate));
             successCount++;
-            queue.processedCount++;
-            logMsg('ICE', `Successfully added candidate ${queue.processedCount} for ${peerId}`);
+            logMsg('ICE', `Added queued candidate ${successCount} for ${peerId}`);
         } catch (error) {
             logMsg('ERROR', `Failed to add ICE candidate for ${peerId}: ${error}`);
         }
     }
 
-    // Update queue state
-    queue.candidates = [];
-    queue.lastUpdated = Date.now();
-    queue.connectionState = pc.iceConnectionState;
-    queue.gatheringState = pc.iceGatheringState;
-    iceCandidateQueues.set(peerId, queue);
-
-    logMsg('ICE', `Processed ${successCount}/${queue.processedCount} candidates for ${peerId}`);
+    // Only clear queue if we processed all candidates
+    if (successCount === queue.candidates.length) {
+        iceCandidateQueues.delete(peerId);
+        logMsg('ICE', `Successfully processed all candidates for ${peerId}`);
+    } else {
+        logMsg('ICE', `Processed ${successCount}/${queue.candidates.length} candidates for ${peerId}`);
+    }
 };
 
 const retryIceConnection = async (pc: RTCPeerConnection, peerId: string, deps: MessageHandlerDependencies, attempt = 0) => {
+    // Don't retry if we're still in initial negotiation
+    if (pc.signalingState !== 'stable') {
+        logMsg('ICE', `Skipping retry for ${peerId} - negotiation in progress`);
+        return;
+    }
+
     if (attempt >= ICE_RETRY_MAX) {
         logMsg('ICE', `Failed to establish connection with ${peerId} after ${ICE_RETRY_MAX} attempts`);
         return;
@@ -391,83 +413,73 @@ const retryIceConnection = async (pc: RTCPeerConnection, peerId: string, deps: M
         logMsg('ICE', `Retrying ICE connection for ${peerId}, attempt ${attempt + 1}`);
         try {
             await pc.restartIce();
-            // Create new offer if we're the initiator
-            if (deps.getState().isInitiator) {
+            // Only create new offer if we're the initiator and in stable state
+            if (deps.getState().isInitiator && pc.signalingState === 'stable') {
                 const offer = await pc.createOffer({ iceRestart: true });
                 await pc.setLocalDescription(offer);
                 deps.sendMessage('offer', {
                     sdp: offer,
-                    fromPeerID: deps.getState().userId,
-                    targetPeerID: peerId
-                });
+                fromPeerID: deps.getState().userId,
+                targetPeerID: peerId
+                });  // Add media flag
             }
-            
-            // Set a timeout for the next retry
-            setTimeout(() => {
-                if (pc.iceConnectionState !== 'connected' && pc.iceConnectionState !== 'completed') {
-                    retryIceConnection(pc, peerId, deps, attempt + 1);
-                }
-            }, ICE_RETRY_DELAY);
         } catch (error) {
             logMsg('ERROR', `ICE retry failed for ${peerId}: ${error}`);
+            return;
         }
+    }
+
+    // Only schedule next retry if still needed
+    if (pc.iceConnectionState !== 'connected' && pc.iceConnectionState !== 'completed') {
+        setTimeout(() => retryIceConnection(pc, peerId, deps, attempt + 1), ICE_RETRY_DELAY);
     }
 };
 
 const handleIceCandidate = async (content: IceCandidateContent, deps: MessageHandlerDependencies) => {
-    const { candidate, fromPeerId } = content;
+    const { candidate, fromPeerId, fromPeerID } = content;
+    const peerId = fromPeerId || fromPeerID;
     
-    if (!fromPeerId) {
-        logMsg('ERROR', 'No peer ID in ICE candidate');
+    if (!peerId) {
+        logMsg('ERROR', 'Missing from peer ID');
         return;
     }
 
-    const peerConn = deps.peerConnections.get(fromPeerId);
-    
-    if (!peerConn) {
-        // Queue the candidate if we don't have a connection yet
-        if (!iceCandidateQueues.has(fromPeerId)) {
-            iceCandidateQueues.set(fromPeerId, {
-                candidates: [],
-                lastUpdated: Date.now(),
-                createdAt: Date.now(),
-                processedCount: 0,
-                hasRemoteDescription: false,
-                connectionState: undefined,
-                gatheringState: undefined
-            });
-        }
-        const queue = iceCandidateQueues.get(fromPeerId)!;
+    // Always ensure we have a queue for this peer
+    if (!iceCandidateQueues.has(peerId)) {
+        iceCandidateQueues.set(peerId, {
+            candidates: [],
+            hasRemoteDescription: false,
+            createdAt: Date.now(),
+            lastUpdated: Date.now(),
+            processedCount: 0,
+            connectionState: undefined,
+            gatheringState: undefined
+        });
+    }
+
+    const pc = deps.peerConnections.get(peerId)?.connection;
+    if (!pc) {
+        // Queue early candidates
+        const queue = iceCandidateQueues.get(peerId)!;
         queue.candidates.push(candidate);
-        logMsg('ICE', `Queued candidate for ${fromPeerId} - waiting for peer connection`);
+        queue.lastUpdated = Date.now();
+        logMsg('ICE', `Queued early candidate for ${peerId} - no connection yet`);
         return;
     }
 
-    // If we have a connection but no remote description, queue the candidate
-    if (!peerConn.connection.remoteDescription || !peerConn.connection.localDescription) {
-        if (!iceCandidateQueues.has(fromPeerId)) {
-            iceCandidateQueues.set(fromPeerId, {
-                candidates: [],
-                lastUpdated: Date.now(),
-                createdAt: Date.now(),
-                processedCount: 0,
-                hasRemoteDescription: false,
-                connectionState: peerConn.connection.iceConnectionState,
-                gatheringState: peerConn.connection.iceGatheringState
-            });
-        }
-        const queue = iceCandidateQueues.get(fromPeerId)!;
-        queue.candidates.push(candidate);
-        logMsg('ICE', `Queued candidate for ${fromPeerId} - waiting for descriptions`);
-        return;
-    }
-
-    // If we have everything we need, add the candidate immediately
     try {
-        await peerConn.connection.addIceCandidate(new RTCIceCandidate(candidate));
-        logMsg('ICE', `Added candidate for ${fromPeerId}`);
+        if (pc.remoteDescription && pc.currentRemoteDescription) {
+            await pc.addIceCandidate(new RTCIceCandidate(candidate));
+            logMsg('ICE', `Added candidate from ${peerId}`);
+        } else {
+            // Queue the candidate
+            const queue = iceCandidateQueues.get(peerId)!;
+            queue.candidates.push(candidate);
+            queue.lastUpdated = Date.now();
+            logMsg('ICE', `Queued candidate for ${peerId} - waiting for remote description`);
+        }
     } catch (error) {
-        logMsg('ERROR', `Failed to add ICE candidate for ${fromPeerId}: ${error}`);
+        logMsg('ERROR', `Failed to handle ICE candidate: ${error}`);
     }
 };
 
@@ -479,6 +491,9 @@ const updateConnectionState = (peerId: string, state: PeerConnectionState, deps:
         logMsg('STATE', `Peer ${peerId} connection state: ${state}`);
     }
 };
+
+// At the top with other state variables
+const peersWithOffers = new Set<string>();
 
 export const createMessageHandler = (deps: MessageHandlerDependencies) => {
     return async (message: WebSocketMessage) => {
@@ -511,45 +526,67 @@ export const createMessageHandler = (deps: MessageHandlerDependencies) => {
 
             case 'createOffer': {
                 const peers = Array.isArray(message.content.peers) ? message.content.peers : [];
-                logMsg('OFFER', `Creating for ${peers.length} peers: ${peers.map(short).join(', ')}`);
+                const newPeers = peers.filter((peerId: string) => !peersWithOffers.has(peerId));
+                
+                if (newPeers.length === 0) {
+                    logMsg('SKIP', 'All peers already processed');
+                    return;
+                }
+                
+                logMsg('OFFER', `Creating for ${newPeers.length} peers: ${newPeers.map(short).join(', ')}`);
                 
                 if (mediaStore.mediaReady) {
-                    for (const peerId of peers) {
+                    for (const peerId of newPeers) {
                         if (!deps.peerConnections.has(peerId)) {
                             try {
-                                // 1. Setup peer connection (tracks are added during setup)
+                                peersWithOffers.add(peerId);
+                                
+                                // 1. Setup peer connection
                                 const pc = await setupPeerConnection(peerId, deps);
                                 
-                                // 2. Verify tracks were added
+                                // 2. Verify tracks before creating offer
                                 const senders = pc.getSenders();
-                                logMsg('TRACK', `Verifying tracks for ${peerId}: ${senders.length} senders`);
+                                logMsg('TRACK', `Pre-offer tracks for ${peerId}:`);
+                                senders.forEach(sender => {
+                                    logMsg('TRACK', `- ${sender.track?.kind || 'none'} track: ${
+                                        sender.track ? `enabled=${sender.track.enabled}, state=${sender.track.readyState}` : 'no track'
+                                    }`);
+                                });
                                 
                                 if (senders.length === 0) {
                                     throw new Error('No tracks added to peer connection');
                                 }
 
-                                // 3. Create and set local description
+                                // 3. Create offer with detailed logging
                                 const offer = await pc.createOffer({
                                     offerToReceiveAudio: true,
                                     offerToReceiveVideo: true
                                 });
                                 
-                                logMsg('SDP', `Created offer for ${peerId}`);
+                                logMsg('SDP', `Created offer for ${peerId}:`, {
+                                    type: offer.type,
+                                    sdpLineCount: offer.sdp ? offer.sdp.split('\n').length : 0,
+                                    hasAudio: offer?.sdp?.includes('m=audio') || false,
+                                    hasVideo: offer?.sdp?.includes('m=video') || false,
+                                    transceivers: pc.getTransceivers().length
+                                });
+
+                                // 4. Set local description
                                 await pc.setLocalDescription(offer);
                                 logMsg('SDP', `Set local description for ${peerId}`);
                                 
-                                // 4. Send offer
+                                // 5. Send offer
                                 deps.sendMessage('offer', {
                                     sdp: offer,
-                                    fromPeerId: deps.getState().userId,
-                                    targetPeerId: peerId
+                                    fromPeerID: deps.getState().userId,
+                                    targetPeerID: peerId
                                 });
                                 
                                 logMsg('OFFER', `Created and sent offer for peer ${peerId}`);
                                 
                             } catch (error) {
                                 logMsg('ERROR', `Failed to create offer for ${peerId}: ${error}`);
-                                // Clean up failed connection
+                                peersWithOffers.delete(peerId);
                                 const failedConn = deps.peerConnections.get(peerId);
                                 if (failedConn) {
                                     failedConn.connection.close();
@@ -561,8 +598,8 @@ export const createMessageHandler = (deps: MessageHandlerDependencies) => {
                         }
                     }
                 } else {
-                    logMsg('WAIT', `Media not ready, queueing ${peers.length} peers`);
-                    deps.setState.setPendingPeers(peers);
+                    logMsg('WAIT', `Media not ready, queueing ${newPeers.length} peers`);
+                    deps.setState.setPendingPeers(newPeers);
                 }
                 break;
             }
@@ -577,49 +614,9 @@ export const createMessageHandler = (deps: MessageHandlerDependencies) => {
                 }
                 break;
 
-            case 'iceCandidate': {
-                const { candidate, fromPeerId, fromPeerID } = message.content;
-                const peerId = fromPeerId || fromPeerID;
-                
-                if (!peerId) {
-                    logMsg('ERROR', 'Missing from peer ID');
-                    return;
-                }
-
-                const pc = deps.peerConnections.get(peerId)?.connection;
-                if (!pc) {
-                    logMsg('ERROR', `No connection found for peer ${peerId}`);
-                    return;
-                }
-
-                try {
-                    if (pc.remoteDescription && pc.currentRemoteDescription) {
-                        await pc.addIceCandidate(new RTCIceCandidate(candidate));
-                        logMsg('ICE', `Added candidate from ${peerId}`);
-                    } else {
-                        // Queue the candidate
-                        if (!iceCandidateQueues.has(peerId)) {
-                            iceCandidateQueues.set(peerId, {
-                                candidates: [],
-                                hasRemoteDescription: false,
-                                createdAt: Date.now(),
-                                lastUpdated: Date.now(),
-                                processedCount: 0,
-                                connectionState: undefined,
-                                gatheringState: undefined
-                            });
-                        }
-                        const queue = iceCandidateQueues.get(peerId)!;
-                        queue.candidates.push(candidate);
-                        queue.lastUpdated = Date.now();
-                        iceCandidateQueues.set(peerId, queue);
-                        logMsg('ICE', `Queued candidate for ${peerId} - waiting for remote description`);
-                    }
-                } catch (error) {
-                    logMsg('ERROR', `Failed to handle ICE candidate: ${error}`);
-                }
+            case 'iceCandidate':
+                await handleIceCandidate(message.content, deps);
                 break;
-            }
 
             case 'userID':
                 internalState.userId = message.content;

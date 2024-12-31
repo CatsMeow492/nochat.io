@@ -5,7 +5,49 @@ class WebSocketService {
   private subscribers = new Map<string, Set<(data: any) => void>>();
   private reconnectTimeout: number | null = null;
   private isConnected = false;
-  private state: WebRTCState | null = null;
+  private lastMessageTimestamps = new Map<string, number>();
+  private readonly DEDUPE_INTERVAL = 1000; // 1 second
+  private state: WebRTCState = {
+    isInitiator: false,
+    isPeerConnectionReady: false,
+    isNegotiating: false,
+    meetingStarted: false,
+    hasEstablishedConnection: false,
+    userId: null,
+    messages: [],
+    mediaReady: false,
+    pendingPeers: [],
+    offerQueue: new Map(),
+    localStream: null,
+    peerConnections: new Map(),
+    iceCandidateQueue: new Map(),
+    rtcConfig: {},
+    activePeers: new Set(),
+    remoteStreams: new Map()
+  };
+  private iceServers: RTCIceServer[] = [
+    { urls: 'stun:stun.l.google.com:19302' } // Default STUN server
+  ];
+
+  private shouldProcessMessage(type: string): boolean {
+    const now = Date.now();
+    const lastTimestamp = this.lastMessageTimestamps.get(type);
+    
+    // Always process if no recent message of this type
+    if (!lastTimestamp) {
+      this.lastMessageTimestamps.set(type, now);
+      return true;
+    }
+
+    // Check if enough time has passed since last message
+    if (now - lastTimestamp > this.DEDUPE_INTERVAL) {
+      this.lastMessageTimestamps.set(type, now);
+      return true;
+    }
+
+    console.log(`[WebSocketService] Deduplicating ${type} message`);
+    return false;
+  }
 
   setSocket(socket: WebSocket | null) {
     console.log('[WebSocketService] Setting socket:', socket ? 'new socket' : 'null');
@@ -18,67 +60,63 @@ class WebSocketService {
 
     this.socket = socket;
     this.isConnected = socket !== null;
+    this.lastMessageTimestamps.clear(); // Clear deduplication state on new socket
 
     if (socket) {
-      console.log('[WebSocketService] Initializing socket event handlers');
-      
-      socket.onclose = (event) => {
-        console.log('[WebSocketService] Socket closed:', event.code, event.reason);
+      socket.onmessage = async (event) => {
+        try {
+          const message = JSON.parse(event.data);
+          
+          // Deduplicate certain message types
+          if (['startMeeting', 'userList'].includes(message.type) && !this.shouldProcessMessage(message.type)) {
+            return;
+          }
+
+          console.log('[WebSocketService] Processing message:', {
+            type: message.type,
+            content: message.content
+          });
+          
+          // Update internal state based on message type
+          switch (message.type) {
+            case 'userID':
+              this.state.userId = message.content;
+              break;
+            case 'initiatorStatus':
+              this.state.isInitiator = message.content === true || message.content === 'true';
+              break;
+            case 'userList':
+              if (message.content && Array.isArray(message.content.users)) {
+                this.state.activePeers = new Set(message.content.users);
+                console.log('[WebSocketService] Updated active peers:', message.content.users);
+              }
+              break;
+            case 'startMeeting':
+              if (!this.state.meetingStarted) {
+                this.state.meetingStarted = true;
+                console.log('[WebSocketService] Meeting started');
+              }
+              break;
+          }
+          
+          // Notify subscribers
+          this.notifySubscribers(message.type, message.content);
+          this.notifySubscribers('message', message);
+          this.notifySubscribers('stateChange', this.state);
+        } catch (error) {
+          console.error('[WebSocketService] Error handling message:', error);
+        }
+      };
+
+      socket.onclose = () => {
         this.isConnected = false;
         this.notifySubscribers('connectionState', { connected: false });
       };
 
       socket.onopen = () => {
-        console.log('[WebSocketService] Socket opened successfully');
         this.isConnected = true;
         this.notifySubscribers('connectionState', { connected: true });
       };
-
-      socket.onerror = (error) => {
-        console.error('[WebSocketService] Socket error:', error);
-      };
-
-      socket.onmessage = async (event) => {
-        try {
-          const message = JSON.parse(event.data);
-          console.log('[WebSocketService] Received message:', {
-            type: message.type,
-            content: message.content
-          });
-          
-          // Notify subscribers of the specific message type
-          this.notifySubscribers(message.type, message.content);
-          
-          // Also notify 'message' subscribers of all messages
-          this.notifySubscribers('message', message);
-        } catch (error) {
-          console.error('[WebSocketService] Error handling message:', error);
-        }
-      };
-    }
-  }
-
-  private async handleIncomingCall(data: { from: string; fromName?: string; roomId: string }) {
-    try {
-      // Request notification permission if needed
-      if (Notification.permission === 'default') {
-        await Notification.requestPermission();
-      }
-
-      if (Notification.permission === 'granted') {
-        const notification = new Notification('Incoming Call', {
-          body: `${data.fromName || data.from} is calling you`,
-          icon: '/favicon.ico',
-          requireInteraction: true, // Keep notification until user interacts
-        });
-
-        notification.onclick = () => {
-          window.focus();
-          window.location.href = `/call/${data.roomId}`;
-        };
-      }
-    } catch (err) {
-      console.error('Error showing notification:', err);
     }
   }
 
@@ -103,7 +141,11 @@ class WebSocketService {
     }
     this.subscribers.get(type)?.add(callback);
     
-    // Return unsubscribe function
+    // If subscribing to state changes, immediately send current state
+    if (type === 'stateChange') {
+      callback(this.state);
+    }
+    
     return () => this.subscribers.get(type)?.delete(callback);
   }
 
@@ -129,12 +171,31 @@ class WebSocketService {
     return this.socket;
   }
 
-  setState(state: WebRTCState) {
-    this.state = state;
+  getState(): WebRTCState {
+    return this.state;
   }
 
-  getState(): WebRTCState | null {
-    return this.state;
+  setState(newState: Partial<WebRTCState>) {
+    this.state = { ...this.state, ...newState };
+    this.notifySubscribers('stateChange', this.state);
+  }
+
+  setIceServers(servers: RTCIceServer[]) {
+    if (!Array.isArray(servers) || servers.length === 0) {
+      console.warn('[WebSocketService] Invalid ICE servers provided, keeping existing configuration');
+      return;
+    }
+    console.log('[WebSocketService] Updating ICE servers:', servers);
+    this.iceServers = servers;
+    this.state.rtcConfig = {
+      ...this.state.rtcConfig,
+      iceServers: servers
+    };
+    this.notifySubscribers('stateChange', this.state);
+  }
+
+  getIceServers(): RTCIceServer[] {
+    return this.iceServers;
   }
 }
 

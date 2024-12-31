@@ -87,14 +87,14 @@ const CallView = () => {
     };
   }, []);
 
-  // Handle room join/leave
+  // Pass ICE servers to websocket service when joining room
   useEffect(() => {
     if (roomId && websocketService) {
       websocketService.send('joinRoom', { roomId });
 
       return () => {
         websocketService.send('leaveRoom', { roomId });
-        cleanup(); // Clean up media when leaving
+        cleanup();
       };
     }
   }, [roomId, cleanup]);
