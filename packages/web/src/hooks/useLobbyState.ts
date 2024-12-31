@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import websocketService from '../services/websocket';
+import { useMediaStore } from '../store/mediaStore';
 
 interface UseLobbyStateProps {
   roomId: string | undefined;
@@ -12,6 +13,9 @@ export const useLobbyState = ({ roomId, userId, initialIsInitiator }: UseLobbySt
   const [userCount, setUserCount] = useState<number>(0);
   const [isInitiator, setIsInitiator] = useState<boolean>(initialIsInitiator);
   const [meetingStarted, setMeetingStarted] = useState(false);
+  
+  // Get media state from store
+  const { mediaReady } = useMediaStore();
 
   useEffect(() => {
     if (!roomId) return;
@@ -61,10 +65,21 @@ export const useLobbyState = ({ roomId, userId, initialIsInitiator }: UseLobbySt
     };
   }, [roomId]);
 
+  // Log state changes including media ready state
+  useEffect(() => {
+    console.log('Lobby state updated:', {
+      mediaReady,
+      isInitiator,
+      participantsCount: participants.length,
+      canStartMeeting: isInitiator && mediaReady && participants.length > 0
+    });
+  }, [mediaReady, isInitiator, participants]);
+
   return {
     participants,
     userCount,
     isInitiator,
-    meetingStarted
+    meetingStarted,
+    mediaReady
   };
 };

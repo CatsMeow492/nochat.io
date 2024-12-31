@@ -156,17 +156,6 @@ function App() {
       console.error('[App] WebSocket connection error:', error);
     };
 
-    socket.onmessage = (event) => {
-      try {
-        const message = JSON.parse(event.data);
-        console.log('[App] WebSocket message received:', message.type);
-        // Use global message handler
-        messageHandler(message);
-      } catch (error) {
-        console.error('[App] Error parsing WebSocket message:', error);
-      }
-    };
-
     // Store socket in global service
     websocketService.setSocket(socket);
 
@@ -178,13 +167,17 @@ function App() {
 
   // Connect WebSocket when component mounts
   useEffect(() => {
-    console.log('[App] Setting up WebSocket connection');
+    console.log('[App] Setting up WebSocket connection and message handler');
+    // Subscribe message handler to all messages
+    const unsubscribe = websocketService.subscribe('message', messageHandler);
     connectWebSocket();
+    
     return () => {
-      console.log('[App] Unmounting App, cleaning up WebSocket');
+      console.log('[App] Unmounting App, cleaning up WebSocket and message handler');
+      unsubscribe();
       websocketService.setSocket(null);
     };
-  }, [connectWebSocket]);
+  }, [connectWebSocket, messageHandler]);
 
   return <RouterProvider router={router} />;
 }

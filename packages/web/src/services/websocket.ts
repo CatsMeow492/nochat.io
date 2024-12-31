@@ -1,8 +1,11 @@
+import { WebRTCState } from "../types/chat";
+
 class WebSocketService {
   private socket: WebSocket | null = null;
   private subscribers = new Map<string, Set<(data: any) => void>>();
   private reconnectTimeout: number | null = null;
   private isConnected = false;
+  private state: WebRTCState | null = null;
 
   setSocket(socket: WebSocket | null) {
     console.log('[WebSocketService] Setting socket:', socket ? 'new socket' : 'null');
@@ -124,6 +127,14 @@ class WebSocketService {
 
   getSocket(): WebSocket | null {
     return this.socket;
+  }
+
+  setState(state: WebRTCState) {
+    this.state = state;
+  }
+
+  getState(): WebRTCState | null {
+    return this.state;
   }
 }
 

@@ -1,80 +1,131 @@
-import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Box, Stack, Typography, Button } from '@mui/material';
+import { Box, Stack, Typography } from '@mui/material';
 import { Mic, Videocam, CallEnd } from '@mui/icons-material';
 import { CallButton } from '../components/button';
-import { RTCConfiguration, VERSION, SIGNALING_SERVICE_URL } from '../config/webrtc';
+import { RTCConfiguration } from '../config/webrtc';
 import LobbyOverlay from './lobby';
-import { createMessageHandler } from '../utils/messageHandler';
-import { WebRTCState } from '../types/chat';
-import RemoteVideo from '../components/RemoteVideo';
-import { PeerConnection } from '../types/chat';
+import { useMediaStore } from '../store/mediaStore';
 import websocketService from '../services/websocket';
-// import { useUserList } from '../hooks/useRoomList';
+import { PeerConnectionState } from '../types/chat';
+
 
 // Max retries allowed for play()
 const MAX_PLAY_RETRIES = 3;
 
-const short = (id: string) => id.slice(0, 4);
-
-const checkTurnServer = async (turnConfig: RTCIceServer): Promise<boolean> => {
-  const pc = new RTCPeerConnection({
-    iceServers: [turnConfig],
-    iceTransportPolicy: 'relay'
-  });
-  
-  try {
-    return new Promise<boolean>((resolve) => {
-      const timeout = setTimeout(() => {
-        pc.close();
-        resolve(false);
-      }, 5000);
-
-      pc.onicecandidate = (e) => {
-        if (e.candidate && e.candidate.type === 'relay') {
-          clearTimeout(timeout);
-          pc.close();
-          resolve(true);
-        }
-      };
-
-      const dc = pc.createDataChannel('test');
-      pc.createOffer()
-        .then(offer => pc.setLocalDescription(offer))
-        .catch(() => {
-          clearTimeout(timeout);
-          pc.close();
-          resolve(false);
-        });
-    });
-  } catch (err) {
-    console.error('TURN server check failed:', err);
-    return false;
-  }
-};
-
-const handleReady = () => {
-  // No-op since we're using the global WebSocket service
-};
-
 const CallView = () => {
   const { roomId } = useParams();
   const navigate = useNavigate();
+  const { peerConnectionStates, peerTracks } = useMediaStore();
 
-  // State management
+  // Local state for meeting status
   const [isInitiator, setIsInitiator] = useState<boolean>(false);
-  const [userId, setUserId] = useState<string | null>(() => localStorage.getItem('userId'));
   const [meetingStarted, setMeetingStarted] = useState<boolean>(false);
-  const [messages, setMessages] = useState<any[]>([]);
-  const [peerConnections, setPeerConnections] = useState<Map<string, PeerConnection>>(new Map());
-  const [remoteStreams, setRemoteStreams] = useState<Map<string, MediaStream>>(new Map());
-  const [localStream, setLocalStream] = useState<MediaStream | null>(null);
-  const [mediaReady, setMediaReady] = useState(false);
-  const [activePeers, setActivePeers] = useState<Set<string>>(new Set());
+  const [userId, setUserId] = useState<string | null>(() => localStorage.getItem('userId'));
+
+  // Get media state from store
+  const {
+    localStream,
+    mediaReady,
+    audioEnabled,
+    videoEnabled,
+    toggleAudio,
+    toggleVideo,
+    cleanup
+  } = useMediaStore();
 
   // Refs
   const localVideoRef = useRef<HTMLVideoElement | null>(null);
   const videoRefs = useRef<Map<string, HTMLVideoElement>>(new Map());
+
+  // Track readiness state
+  const trackReadyState = useRef(new Map<string, Set<string>>());
+
+  // Add a stable ref for tracking active peers
+  const activePeers = useRef(new Set<string>());
+
+  // Start meeting
+  const startMeeting = () => {
+    websocketService.send('startMeeting', { roomId });
+  };
+
+  // Handle ready state change
+  const handleReady = () => {
+    // No-op since we're using the global WebSocket service
+  };
+
+  // Enhanced attemptPlay function
+  const attemptPlay = async (element: HTMLVideoElement | HTMLAudioElement, peerId: string) => {
+    try {
+      await element.play();
+    } catch (error) {
+      console.error(`Failed to play ${element.tagName.toLowerCase()} for peer ${peerId}:`, error);
+      // Retry with muted if it's a video element
+      if (element instanceof HTMLVideoElement && !element.muted) {
+        console.log('Retrying with muted video');
+        element.muted = true;
+        await element.play();
+      }
+    }
+  };
+
+  // Track ready state handler
+  const handleTrackReady = (peerId: string, track: MediaStreamTrack) => {
+    if (!trackReadyState.current.has(peerId)) {
+      trackReadyState.current.set(peerId, new Set());
+    }
+    const readyTracks = trackReadyState.current.get(peerId)!;
+    readyTracks.add(track.kind);
+    
+    console.log(`Track ${track.kind} ready for peer ${peerId}. Ready tracks:`, Array.from(readyTracks));
+  };
+
+  // Clean up track state when peer is removed
+  useEffect(() => {
+    return () => {
+      trackReadyState.current.clear();
+    };
+  }, []);
+
+  // Handle room join/leave
+  useEffect(() => {
+    if (roomId && websocketService) {
+      websocketService.send('joinRoom', { roomId });
+
+      return () => {
+        websocketService.send('leaveRoom', { roomId });
+        cleanup(); // Clean up media when leaving
+      };
+    }
+  }, [roomId, cleanup]);
+
+  // Set up local video
+  useEffect(() => {
+    if (localVideoRef.current && localStream) {
+      localVideoRef.current.srcObject = localStream;
+    }
+  }, [localStream]);
+
+  // Subscribe to WebSocket messages for meeting state
+  useEffect(() => {
+    const unsubscribe = websocketService.subscribe('message', (message) => {
+      switch (message.type) {
+        case 'startMeeting':
+          setMeetingStarted(true);
+          break;
+        case 'initiatorStatus':
+          setIsInitiator(message.content === 'true' || message.content === true);
+          break;
+        case 'userID':
+          setUserId(message.content);
+          break;
+      }
+    });
+
+    return () => {
+      if (unsubscribe) unsubscribe();
+    };
+  }, []);
 
   // Setup media stream
   useEffect(() => {
@@ -84,195 +135,66 @@ const CallView = () => {
           video: true, 
           audio: true 
         });
-        setLocalStream(stream);
-        if (localVideoRef.current) {
-          localVideoRef.current.srcObject = stream;
-        }
-        setMediaReady(true);
+        useMediaStore.getState().setLocalStream(stream);
+        useMediaStore.getState().setMediaReady(true);
       } catch (error) {
         console.error('Failed to get local media:', error);
-        setMediaReady(true); // Allow proceeding even if media fails
+        useMediaStore.getState().setMediaReady(true); // Allow proceeding even if media fails
       }
     };
 
     setupMedia();
   }, []);
 
-  // Handle peer connection setup
-  const setupPeerConnection = useCallback((peerId: string) => {
-    const pc = new RTCPeerConnection(RTCConfiguration);
-    
-    // Add local tracks
-    if (localStream) {
-      localStream.getTracks().forEach(track => {
-        pc.addTrack(track, localStream);
-      });
+  // Modify shouldRenderVideo to use the ref
+  const shouldRenderVideo = (peerId: string) => {
+    // If peer is already active, keep rendering
+    if (activePeers.current.has(peerId)) {
+        return true;
     }
-
-    // Handle ICE candidates
-    pc.onicecandidate = (event) => {
-      if (event.candidate) {
-        websocketService.send('iceCandidate', {
-          candidate: event.candidate,
-          peerId,
-          roomId
-        });
-      }
-    };
-
-    // Handle remote tracks
-    pc.ontrack = (event) => {
-      const stream = event.streams[0];
-      setRemoteStreams(prev => {
-        const next = new Map(prev);
-        next.set(peerId, stream);
-        return next;
-      });
-      setActivePeers(prev => new Set(prev).add(peerId));
-    };
-
-    // Store the peer connection
-    setPeerConnections(prev => {
-      const next = new Map(prev);
-      next.set(peerId, {
-        id: peerId,
-        connection: pc,
-        connected: false,
-        trackStatus: { audio: false, video: false },
-        negotiationNeeded: false
-      });
-      return next;
+    
+    const peerState = peerConnectionStates.get(peerId);
+    const tracks = peerTracks.get(peerId);
+    
+    // Only consider READY state as valid
+    const isConnectionValid = peerState?.connectionState === PeerConnectionState.READY;
+    
+    // Both tracks must be live
+    const hasMediaTracks = tracks?.video?.track?.readyState === 'live' && 
+                          tracks?.audio?.track?.readyState === 'live';
+    
+    // Add some debug logging
+    console.debug(`[RENDER] Peer ${peerId} state check:`, {
+        connectionState: peerState?.connectionState,
+        videoTrack: tracks?.video?.track?.readyState,
+        audioTrack: tracks?.audio?.track?.readyState,
+        isValid: isConnectionValid && hasMediaTracks
     });
-
-    return pc;
-  }, [localStream, roomId]);
-
-  // Handle offer creation
-  const createAndSendOffer = useCallback(async (peerId: string) => {
-    const pc = peerConnections.get(peerId)?.connection || setupPeerConnection(peerId);
     
-    try {
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
-      
-      websocketService.send('offer', {
-        sdp: offer,
-        peerId,
-        roomId
-      });
-    } catch (error) {
-      console.error('Error creating offer:', error);
+    if (isConnectionValid && hasMediaTracks) {
+        activePeers.current.add(peerId);
+        return true;
     }
-  }, [peerConnections, setupPeerConnection, roomId]);
-
-  // Handle received offer
-  const handleOffer = useCallback(async (content: any) => {
-    const { sdp, peerId } = content;
-    const pc = peerConnections.get(peerId)?.connection || setupPeerConnection(peerId);
     
-    try {
-      await pc.setRemoteDescription(new RTCSessionDescription(sdp));
-      const answer = await pc.createAnswer();
-      await pc.setLocalDescription(answer);
-      
-      websocketService.send('answer', {
-        sdp: answer,
-        peerId,
-        roomId
-      });
-    } catch (error) {
-      console.error('Error handling offer:', error);
-    }
-  }, [peerConnections, setupPeerConnection, roomId]);
-
-  // Handle received answer
-  const handleAnswer = useCallback(async (content: any) => {
-    const { sdp, peerId } = content;
-    const pc = peerConnections.get(peerId)?.connection;
-    
-    if (pc) {
-      try {
-        await pc.setRemoteDescription(new RTCSessionDescription(sdp));
-      } catch (error) {
-        console.error('Error handling answer:', error);
-      }
-    }
-  }, [peerConnections]);
-
-  // Handle ICE candidate
-  const handleIceCandidate = useCallback(async (content: any) => {
-    const { candidate, peerId } = content;
-    const pc = peerConnections.get(peerId)?.connection;
-    
-    if (pc) {
-      try {
-        await pc.addIceCandidate(new RTCIceCandidate(candidate));
-      } catch (error) {
-        console.error('Error handling ICE candidate:', error);
-      }
-    }
-  }, [peerConnections]);
-
-  // Subscribe to WebSocket messages
-  useEffect(() => {
-    const unsubscribe = websocketService.subscribe('message', (message) => {
-      // Handle WebRTC signaling messages
-      switch (message.type) {
-        case 'offer':
-          handleOffer(message.content);
-          break;
-        case 'answer':
-          handleAnswer(message.content);
-          break;
-        case 'iceCandidate':
-          handleIceCandidate(message.content);
-          break;
-        case 'startMeeting':
-          setMeetingStarted(true);
-          break;
-        // ... handle other message types ...
-      }
-    });
-
-    return () => {
-      if (unsubscribe) unsubscribe();
-    };
-  }, [handleOffer, handleAnswer, handleIceCandidate]);
-
-  // Start meeting
-  const startMeeting = useCallback(() => {
-    websocketService.send('startMeeting', { roomId });
-  }, [roomId]);
-
-  // Add attemptPlay function
-  const attemptPlay = async (videoElement: HTMLVideoElement, retryCount = 0) => {
-    if (!videoElement) return;
-
-    try {
-      await videoElement.play();
-    } catch (error) {
-      if (retryCount < MAX_PLAY_RETRIES) {
-        setTimeout(() => {
-          attemptPlay(videoElement, retryCount + 1);
-        }, 2000);
-      }
-    }
+    return false;
   };
 
-  // Handle room join/leave
+  // Add cleanup for disconnected peers
   useEffect(() => {
-    if (roomId && websocketService) {
-      // Explicitly send join room message
-      websocketService.send('joinRoom', { roomId });
+    const cleanup = (peerId: string) => {
+        const state = peerConnectionStates.get(peerId)?.connectionState;
+        if (state === PeerConnectionState.FAILED || 
+            state === PeerConnectionState.CLOSED) {
+            activePeers.current.delete(peerId);
+        }
+    };
 
-      // Cleanup when leaving
-      return () => {
-        websocketService.send('leaveRoom', { roomId });
-      };
-    }
-  }, [roomId]);
+    // Subscribe to connection state changes
+    return () => {
+        activePeers.current.clear();
+    };
+  }, []);
 
-  // Render video grid and controls
   return (
     <Box
       sx={{
@@ -291,25 +213,16 @@ const CallView = () => {
           isInitiator={isInitiator}
           meetingStarted={meetingStarted}
           onStartMeeting={startMeeting}
-          participants={Array.from(peerConnections.keys())}
+          participants={Array.from(peerTracks.keys())}
           userId={userId}
           roomId={roomId}
           onReadyChange={handleReady}
-          mediaReady={mediaReady}
-          onCameraToggle={(enabled) => {
-            if (localStream) {
-              localStream.getVideoTracks().forEach(track => track.enabled = enabled);
-            }
-          }}
-          onMicrophoneToggle={(enabled) => {
-            if (localStream) {
-              localStream.getAudioTracks().forEach(track => track.enabled = enabled);
-            }
-          }}
+          onCameraToggle={toggleVideo}
+          onMicrophoneToggle={toggleAudio}
         />
       )}
 
-      {/* Main video grid container - add max height */}
+      {/* Main video grid container */}
       <Box
         sx={{
           flex: 1,
@@ -334,70 +247,119 @@ const CallView = () => {
               padding: 2,
             }}
           >
-            {Array.from(remoteStreams.entries())
-              .filter(([peerId, stream]) => activePeers.has(peerId))
-              .map(([peerId, stream]) => {
-                const hasVideoTracks = stream.getVideoTracks().length > 0;
-                const hasAudioTracks = stream.getAudioTracks().length > 0;
-                
-                return (
+            {Array.from(peerTracks.entries()).map(([peerId, tracks]) => {
+              const videoTrack = tracks.video?.track;
+              const audioTrack = tracks.audio?.track;
+              const stream = tracks.video?.stream || tracks.audio?.stream;
+              
+              if (!stream) {
+                console.log(`No stream available for peer ${peerId}`);
+                return null;
+              }
+
+              // Update track ready state
+              if (videoTrack) handleTrackReady(peerId, videoTrack);
+              if (audioTrack) handleTrackReady(peerId, audioTrack);
+              
+              console.log(`Rendering video for peer ${peerId}:`, {
+                hasVideoTrack: !!videoTrack,
+                videoEnabled: videoTrack?.enabled,
+                videoState: videoTrack?.readyState,
+                hasAudioTrack: !!audioTrack,
+                audioEnabled: audioTrack?.enabled,
+                audioState: audioTrack?.readyState,
+                readyTracks: Array.from(trackReadyState.current.get(peerId) || new Set()),
+                connectionState: peerConnectionStates.get(peerId)?.connectionState,
+                streamTracks: stream.getTracks().map(t => ({
+                  kind: t.kind,
+                  enabled: t.enabled,
+                  state: t.readyState
+                }))
+              });
+              
+              return (
+                <Box
+                  key={`video-container-${peerId}`}
+                  sx={{
+                    position: 'relative',
+                    width: '100%',
+                    paddingTop: '75%',
+                    background: 'rgba(255, 255, 255, 0.02)',
+                    border: '1px solid rgba(255, 255, 255, 0.05)',
+                    borderRadius: '16px',
+                    overflow: 'hidden',
+                    backdropFilter: 'blur(12px)',
+                  }}
+                >
                   <Box
-                    key={`video-container-${peerId}`}
                     sx={{
-                      position: 'relative',
+                      position: 'absolute',
+                      top: 0,
+                      left: 0,
                       width: '100%',
-                      paddingTop: '75%',
-                      background: 'rgba(255, 255, 255, 0.02)',
-                      border: '1px solid rgba(255, 255, 255, 0.05)',
-                      borderRadius: '16px',
-                      overflow: 'hidden',
-                      backdropFilter: 'blur(12px)',
+                      height: '100%',
+                      display: 'flex',
+                      justifyContent: 'center',
+                      alignItems: 'center'
                     }}
                   >
-                    <Box
-                      sx={{
-                        position: 'absolute',
-                        top: 0,
-                        left: 0,
-                        width: '100%',
-                        height: '100%',
-                        display: 'flex',
-                        justifyContent: 'center',
-                        alignItems: 'center'
-                      }}
-                    >
-                      {hasVideoTracks ? (
+                    {shouldRenderVideo(peerId) && (
+                      <>
                         <video
+                          key={`video-${peerId}`}
                           ref={el => {
-                            if (el) {
-                              videoRefs.current.set(peerId, el);
-                              if (el.srcObject !== stream) {
-                                console.log(`Setting stream for video element ${peerId}`);
+                            if (!el) return;
+                            
+                            // Only set srcObject if it's different
+                            if (el.srcObject !== stream) {
+                                console.log(`Setting stream for video element ${peerId}`, {
+                                    streamTracks: stream?.getTracks().map(t => ({
+                                        kind: t.kind,
+                                        enabled: t.enabled,
+                                        state: t.readyState
+                                    }))
+                                });
                                 el.srcObject = stream;
-                                attemptPlay(el);
-                              }
+                                el.muted = true;
+                                
+                                // Debounce play attempts
+                                const playPromise = el.play();
+                                if (playPromise) {
+                                    playPromise.catch(err => {
+                                        if (err.name !== 'AbortError') {
+                                            console.error(`Failed to play video for peer ${peerId}:`, err);
+                                        }
+                                    });
+                                }
                             }
                           }}
                           autoPlay
                           playsInline
+                          muted
                           style={{
                             width: '100%',
                             height: '100%',
                             objectFit: 'cover'
                           }}
                         />
-                      ) : (
-                        <Typography variant="h6" sx={{ color: 'white' }}>
-                          {hasAudioTracks ? 'Audio Only' : 'No Media'}
-                        </Typography>
-                      )}
-                    </Box>
+                        <audio
+                          autoPlay
+                          ref={el => {
+                            if (el && stream) {
+                              el.srcObject = stream;
+                              el.play().catch(err => console.error('Failed to play audio:', err));
+                            }
+                          }}
+                        />
+                      </>
+                    )}
                   </Box>
-                );
-              })}
+                </Box>
+              );
+            })}
           </Box>
 
-          {/* Add local video overlay */}
+          {/* Local video overlay */}
           {localStream && (
             <Box
               sx={{
@@ -410,6 +372,7 @@ const CallView = () => {
               }}
             >
               <video
+                ref={localVideoRef}
                 autoPlay
                 playsInline
                 muted
@@ -418,18 +381,13 @@ const CallView = () => {
                   height: '100%',
                   objectFit: 'cover'
                 }}
-                ref={el => {
-                  if (el) {
-                    el.srcObject = localStream;
-                  }
-                }}
               />
             </Box>
           )}
         </Box>
       </Box>
 
-      {/* Controls - ensure they stay at bottom */}
+      {/* Controls */}
       <Box 
         sx={{ 
           position: 'fixed',
@@ -445,6 +403,8 @@ const CallView = () => {
         <Stack direction="row" justifyContent="center" spacing={3}>
           <CallButton 
             Icon={Mic} 
+            active={audioEnabled}
+            onClick={toggleAudio}
             sx={{
               background: 'rgba(255, 255, 255, 0.02)',
               border: '1px solid rgba(255, 255, 255, 0.05)',
@@ -457,6 +417,8 @@ const CallView = () => {
           />
           <CallButton 
             Icon={Videocam}
+            active={videoEnabled}
+            onClick={toggleVideo}
             sx={{
               background: 'rgba(255, 255, 255, 0.02)',
               border: '1px solid rgba(255, 255, 255, 0.05)',
@@ -470,7 +432,10 @@ const CallView = () => {
           <CallButton 
             Icon={CallEnd} 
             color="error.main" 
-            onClick={() => navigate('/')}
+            onClick={() => {
+              cleanup();
+              navigate('/');
+            }}
             sx={{
               background: 'rgba(255, 255, 255, 0.02)',
               border: '1px solid rgba(255, 255, 255, 0.05)',
@@ -484,6 +449,7 @@ const CallView = () => {
         </Stack>
       </Box>
 
+      {/* Meeting status indicators */}
       {isInitiator ? (
         !meetingStarted && (
           <Box sx={{ 
@@ -492,24 +458,21 @@ const CallView = () => {
             justifyContent: 'center',
             background: 'rgba(8, 8, 12, 0.95)',
           }}>
-            <Button
-              variant="contained"
+            <button
               onClick={startMeeting}
-              sx={{
-                py: 2,
-                px: 6,
+              style={{
+                padding: '12px 24px',
                 borderRadius: '12px',
                 fontSize: '1.1rem',
                 fontWeight: 600,
-                textTransform: 'none',
                 background: 'linear-gradient(45deg, #6366f1, #8b5cf6)',
-                '&:hover': {
-                  background: 'linear-gradient(45deg, #4f46e5, #7c3aed)',
-                },
+                color: 'white',
+                border: 'none',
+                cursor: 'pointer',
               }}
             >
               Start Call
-            </Button>
+            </button>
           </Box>
         )
       ) : (
@@ -529,12 +492,6 @@ const CallView = () => {
           </Typography>
         </Box>
       )}
-
-      {/* {userId && <ChatComponent
-        messages={messages}
-        userId={userId}
-        onSendMessage={handleSendMessage}
-      />} */}
     </Box>
   );
 };
