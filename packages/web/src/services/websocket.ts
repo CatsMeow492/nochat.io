@@ -197,6 +197,15 @@ class WebSocketService {
   getIceServers(): RTCIceServer[] {
     return this.iceServers;
   }
+
+  cleanup() {
+    const userId = localStorage.getItem('userId');
+    // Remove temporary user IDs on cleanup
+    if (userId?.startsWith('anon_')) {
+      localStorage.removeItem('userId');
+    }
+    this.setSocket(null);
+  }
 }
 
 export default new WebSocketService(); 
