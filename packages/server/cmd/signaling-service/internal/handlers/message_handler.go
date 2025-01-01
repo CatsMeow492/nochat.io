@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"time"
 
 	"gitlab.com/secp/services/backend/cmd/signaling-service/internal/models"
 )
@@ -308,10 +309,45 @@ func (h *MessageHandler) handleInitiatorStatus(msg models.Message, client *model
 }
 
 func (h *MessageHandler) handleChatMessage(msg models.Message, client *models.Client, room *models.Room) {
-	log.Printf("Received chat message from client %s in room: %s", client.UserID, room.ID)
-	log.Printf("Broadcasting chat message to room: %s", msg.RoomID)
-	broadcastToRoom(room, "chatMessage", toString(msg.Content), client)
-	log.Printf("Chat message broadcasted with content: %s", toString(msg.Content))
+	// Parse the chat message
+	var chatMessage models.ChatMessage
+	contentBytes, err := json.Marshal(msg.Content)
+	if err != nil {
+		log.Printf("Error marshaling chat content: %v", err)
+		return
+	}
+
+	if err := json.Unmarshal(contentBytes, &chatMessage); err != nil {
+		log.Printf("Error unmarshaling chat message: %v", err)
+		return
+	}
+
+	// Add server-side timestamp if not present
+	if chatMessage.Timestamp == "" {
+		chatMessage.Timestamp = time.Now().UTC().Format(time.RFC3339)
+	}
+
+	// Ensure sender info is correct
+	chatMessage.Sender = client.UserID
+	chatMessage.RoomID = room.ID
+
+	// Create broadcast message
+	broadcastMsg := models.Message{
+		Type:    "chatMessage",
+		RoomID:  room.ID,
+		Content: chatMessage,
+	}
+
+	// Marshal the message
+	messageBytes, err := json.Marshal(broadcastMsg)
+	if err != nil {
+		log.Printf("Error marshaling broadcast message: %v", err)
+		return
+	}
+
+	// Broadcast to all clients in the room
+	room.Broadcast(messageBytes, nil)
+	log.Printf("Chat message broadcasted in room %s from user %s", room.ID, client.UserID)
 }
 
 func (h *MessageHandler) handleRequestInitialState(msg models.Message, client *models.Client, room *models.Room) {
