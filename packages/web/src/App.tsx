@@ -15,6 +15,10 @@ import { createMessageHandler } from './utils/messageHandler';
 import websocketService from './services/websocket';
 import { WebRTCState } from './types/chat';
 
+const generateTempUserId = () => {
+  return 'anon_' + Math.random().toString(36).substr(2, 9);
+};
+
 function WrappedApp() {
   return (
     <Provider store={store}>
@@ -129,10 +133,13 @@ function App() {
 
   // Establish WebSocket connection when user is logged in
   const connectWebSocket = useCallback(() => {
-    const userId = safeGetStorage('userId');
+    let userId = safeGetStorage('userId');
+    
+    // If no userId exists, create a temporary one
     if (!userId) {
-      console.log('[App] No userId found, skipping WebSocket connection');
-      return;
+      userId = generateTempUserId();
+      safeSetStorage('userId', userId);
+      console.log('[App] Generated temporary userId:', userId);
     }
 
     console.log('[App] Initializing WebSocket connection for user:', userId);

@@ -30,6 +30,7 @@ interface User {
   email?: string;
   name: string;
   wallet_address?: string;
+  isAnonymous?: boolean;
 }
 
 function AppBar() {
@@ -41,17 +42,31 @@ function AppBar() {
   const [showWalletSignIn, setShowWalletSignIn] = useState(false);
 
   useEffect(() => {
-    // Check if user is already signed in
-    const userId = localStorage.getItem('userId');
-    if (userId) {
-      fetch(`https://nochat.io/api/users/${userId}`)
-        .then(res => res.json())
-        .then(data => setUser(data))
-        .catch(err => {
-          console.error('Error fetching user:', err);
-          localStorage.removeItem('userId');
+    const fetchUserData = async () => {
+      const userId = localStorage.getItem('userId');
+      
+      // Skip fetching for anonymous users
+      if (userId?.startsWith('anon_')) {
+        setUser({
+          id: userId,
+          name: 'Anonymous User',
+          isAnonymous: true
         });
-    }
+        return;
+      }
+
+      try {
+        const response = await fetch(`https://nochat.io/api/users/${userId}`);
+        if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+        const userData = await response.json();
+        setUser(userData);
+      } catch (error) {
+        console.error('Error fetching user:', error);
+        // Handle error gracefully
+      }
+    };
+
+    fetchUserData();
   }, []);
 
   const handleSignUp = async (email: string, name: string) => {
