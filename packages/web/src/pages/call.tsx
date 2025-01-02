@@ -8,6 +8,7 @@ import LobbyOverlay from './lobby';
 import { useMediaStore } from '../store/mediaStore';
 import websocketService from '../services/websocket';
 import { PeerConnectionState } from '../types/chat';
+import ChatOverlay from '../components/ChatOverlay';
 
 
 // Max retries allowed for play()
@@ -207,6 +208,8 @@ const CallView = () => {
         overflow: 'hidden',
       }}
     >
+      <ChatOverlay roomId={roomId || ''} userId={userId || ''} />
+
       {/* Lobby Overlay - Only show when meeting hasn't started */}
       {!meetingStarted && (
         <LobbyOverlay

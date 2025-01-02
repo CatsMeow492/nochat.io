@@ -22,12 +22,11 @@ import {
 import Background from "../assets/static_background.png";
 import PNGBackground from "../components/Background/static_background";
 import ModernAppBar from "../components/appbar";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useLocation } from "react-router-dom";
 import { useCallSettings } from "../context/provider";
 import { CallIntent, Device } from "../context/context";
 
 enum CallReducerAction {}
-
 
 /**
  * CallConfigurations Component
@@ -43,9 +42,13 @@ const CallConfigurations: React.FC = () => {
   // Global state and dispatch function from CallSettingsContext
   // @ts-ignore - TODO: Remove this once types are properly set up in the context
   const { state, dispatch } = useCallSettings();
+  const location = useLocation();
 
   // Local state for room ID input
-  const [roomId, setRoomId] = useState<string>("");
+  const [roomId, setRoomId] = useState<string>(() => {
+    // Initialize from URL state if available
+    return (location.state as { roomId?: string })?.roomId || "";
+  });
 
   const webcamRef = useRef<Webcam>(null);
 
@@ -98,6 +101,16 @@ const CallConfigurations: React.FC = () => {
     getDevices();
   }, [dispatch]);
 
+  // If room ID is provided in URL state, automatically set call intent to Join
+  useEffect(() => {
+    if (location.state?.roomId) {
+      dispatch({
+        type: "SET_CALL_INTENT",
+        payload: CallIntent.Join,
+      });
+    }
+  }, [location.state, dispatch]);
+
   /**
    * Handler for video device selection change
    */
@@ -134,37 +147,28 @@ const CallConfigurations: React.FC = () => {
 
     if (state.callIntent === CallIntent.Join) {
       // Handle join call logic
-      dispatch({ type: "SET_ROOM_ID", payload: roomId });
       id = roomId;
-
     } else {
       // Handle start call logic
-      const generatedRoomId = state.callIntent === CallIntent.Start 
-      ? Math.random().toString(36).substring(7) 
-      : roomId;
-
-    
-      dispatch({ type: "SET_ROOM_ID", payload: generatedRoomId });
-      setRoomId(generatedRoomId)
+      const generatedRoomId = Math.random().toString(36).substring(7);
+      setRoomId(generatedRoomId);
       id = generatedRoomId;
-
     }
 
     if (!id) {
-      throw new Error("Invalid Room Id")
+      throw new Error("Invalid Room Id");
     }
 
-    return {id: id }
+    return { id };
   };
 
   /**
    * Initiate the call and navigate to the call screen
-   * TODO: Implement navigation to actual call screen
    */
   const startCall = async () => {
     // Generate a room ID if starting a new call
-    const { id} = await setupCall()
-    navigate(`/call/${id}`);
+    const { id } = await setupCall();
+    navigate(`/call/${id}/active`);
   };
 
 
