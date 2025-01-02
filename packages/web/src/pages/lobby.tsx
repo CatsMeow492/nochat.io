@@ -186,12 +186,16 @@ const LobbyOverlay: React.FC<LobbyOverlayProps> = ({
                   fontFamily: 'monospace',
                 }}
               >
-                {window.location.href}
+                {window.location.href.replace('/active', '')}
               </Typography>
               <Tooltip title={copied ? 'Copied!' : 'Copy link'}>
                 <IconButton
                   size="small"
-                  onClick={handleCopyLink}
+                  onClick={() => {
+                    navigator.clipboard.writeText(window.location.href.replace('/active', ''));
+                    setCopied(true);
+                    setTimeout(() => setCopied(false), 2000);
+                  }}
                   sx={{ color: copied ? 'success.main' : 'primary.main' }}
                 >
                   {copied ? (
