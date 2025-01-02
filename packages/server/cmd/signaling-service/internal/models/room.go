@@ -97,6 +97,8 @@ func NewRoom(id, name, createdBy string) *Room {
 		Mu:                sync.RWMutex{},
 		LastActivity:      time.Now(),
 		IsActive:          true,
+		MeetingStarted:    false,
+		State:             "waiting",
 		signalingStates:   make(map[string]map[string]*SignalingState),
 		queuedAnswers:     make(map[string]map[string][]map[string]interface{}),
 		activeConnections: make(map[string]map[string]bool),
@@ -115,7 +117,29 @@ func checkForDeadlock() {
 }
 
 func (r *Room) Save(ctx context.Context, rdb *redis.Client) error {
-	data, err := json.Marshal(r)
+	r.Mu.RLock()
+	defer r.Mu.RUnlock()
+
+	// Create a copy of the room with only the fields we want to persist
+	persistedRoom := struct {
+		ID             string    `json:"id"`
+		Name           string    `json:"name"`
+		CreatedBy      string    `json:"created_by"`
+		State          string    `json:"state"`
+		MeetingStarted bool      `json:"meeting_started"`
+		LastActivity   time.Time `json:"last_activity"`
+		IsActive       bool      `json:"is_active"`
+	}{
+		ID:             r.ID,
+		Name:           r.Name,
+		CreatedBy:      r.CreatedBy,
+		State:          r.State,
+		MeetingStarted: r.MeetingStarted,
+		LastActivity:   r.LastActivity,
+		IsActive:       r.IsActive,
+	}
+
+	data, err := json.Marshal(persistedRoom)
 	if err != nil {
 		return err
 	}
@@ -303,17 +327,17 @@ type RoomManager interface {
 	RemoveRoom(roomID string) error
 }
 
-type roomManagerImpl struct {
+type RoomManagerImpl struct {
 	rooms map[string]*Room
 	mu    sync.RWMutex
 	rdb   *redis.Client
 }
 
-func (rm *roomManagerImpl) SetRedisClient(client *redis.Client) {
+func (rm *RoomManagerImpl) SetRedisClient(client *redis.Client) {
 	rm.rdb = client
 }
 
-func (rm *roomManagerImpl) GetRoom(roomID string) (*Room, error) {
+func (rm *RoomManagerImpl) GetRoom(roomID string) (*Room, error) {
 	rm.mu.RLock()
 	defer rm.mu.RUnlock()
 
@@ -324,7 +348,7 @@ func (rm *roomManagerImpl) GetRoom(roomID string) (*Room, error) {
 	return room, nil
 }
 
-func (rm *roomManagerImpl) GetAllRooms() []*Room {
+func (rm *RoomManagerImpl) GetAllRooms() []*Room {
 	rm.mu.RLock()
 	defer rm.mu.RUnlock()
 	rooms := make([]*Room, 0, len(rm.rooms))
@@ -334,25 +358,25 @@ func (rm *roomManagerImpl) GetAllRooms() []*Room {
 	return rooms
 }
 
-func NewRoomManager() RoomManager {
-	return &roomManagerImpl{
+func NewRoomManager() *RoomManagerImpl {
+	return &RoomManagerImpl{
 		rooms: make(map[string]*Room),
 	}
 }
 
 var (
-	roomManagerInstance RoomManager
+	roomManagerInstance *RoomManagerImpl
 	once                sync.Once
 )
 
-func GetRoomManager() RoomManager {
+func GetRoomManager() *RoomManagerImpl {
 	once.Do(func() {
 		roomManagerInstance = NewRoomManager()
 	})
 	return roomManagerInstance
 }
 
-func (rm *roomManagerImpl) CreateRoom(id, name, createdBy string) (*Room, error) {
+func (rm *RoomManagerImpl) CreateRoom(id, name, createdBy string) (*Room, error) {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
 
@@ -373,7 +397,7 @@ func (rm *roomManagerImpl) CreateRoom(id, name, createdBy string) (*Room, error)
 	return newRoom, nil
 }
 
-func (rm *roomManagerImpl) GetOrCreateRoom(id string) (*Room, error) {
+func (rm *RoomManagerImpl) GetOrCreateRoom(id string) (*Room, error) {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
 
@@ -381,6 +405,33 @@ func (rm *roomManagerImpl) GetOrCreateRoom(id string) (*Room, error) {
 		return room, nil
 	}
 
+	// Try to load from Redis first
+	if rm.rdb != nil {
+		ctx := context.Background()
+		data, err := rm.rdb.Get(ctx, "room:"+id).Bytes()
+		if err == nil {
+			var persistedRoom struct {
+				ID             string    `json:"id"`
+				Name           string    `json:"name"`
+				CreatedBy      string    `json:"created_by"`
+				State          string    `json:"state"`
+				MeetingStarted bool      `json:"meeting_started"`
+				LastActivity   time.Time `json:"last_activity"`
+				IsActive       bool      `json:"is_active"`
+			}
+			if err := json.Unmarshal(data, &persistedRoom); err == nil {
+				room := NewRoom(id, persistedRoom.Name, persistedRoom.CreatedBy)
+				room.State = persistedRoom.State
+				room.MeetingStarted = persistedRoom.MeetingStarted
+				room.LastActivity = persistedRoom.LastActivity
+				room.IsActive = persistedRoom.IsActive
+				rm.rooms[id] = room
+				return room, nil
+			}
+		}
+	}
+
+	// If not found in Redis or error occurred, create new room
 	newRoom := NewRoom(id, "Default Room", "system")
 	rm.rooms[id] = newRoom
 	log.Printf("Created new room %s", id)
@@ -393,7 +444,7 @@ func (r *Room) UpdateActivity() {
 	r.LastActivity = time.Now()
 }
 
-func (rm *roomManagerImpl) RemoveRoom(roomID string) error {
+func (rm *RoomManagerImpl) RemoveRoom(roomID string) error {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
 

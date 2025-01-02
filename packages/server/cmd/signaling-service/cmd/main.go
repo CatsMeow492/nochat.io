@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -9,6 +8,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/gorilla/mux"
 	"github.com/gorilla/websocket"
 	"github.com/redis/go-redis/v9"
 	"gitlab.com/secp/services/backend/cmd/signaling-service/internal/handlers"
@@ -30,12 +30,21 @@ var (
 	pingPeriod     = (pongWait * 9) / 10
 )
 
-var roomManager models.RoomManager
-var messageHandler *handlers.MessageHandler
+var (
+	roomManager    *models.RoomManagerImpl
+	messageHandler *handlers.MessageHandler
+)
 
 func init() {
+	rdb := redis.NewClient(&redis.Options{
+		Addr:     os.Getenv("REDIS_ADDR"),
+		Password: os.Getenv("REDIS_PASSWORD"),
+		DB:       0,
+	})
+
 	roomManager = models.GetRoomManager()
-	messageHandler = handlers.NewMessageHandler(&roomManager)
+	roomManager.SetRedisClient(rdb)
+	messageHandler = handlers.NewMessageHandler(roomManager, rdb)
 }
 
 func handleConnection(w http.ResponseWriter, r *http.Request) {
@@ -404,19 +413,16 @@ func main() {
 		DB:       0,
 	})
 
-	ctx := context.Background()
-	_, err := rdb.Ping(ctx).Result()
-	if err != nil {
-		log.Fatalf("Error connecting to Redis: %v", err)
-	}
-
-	roomManager = models.GetRoomManager()
+	// Initialize room manager and set Redis client
 	roomManager.SetRedisClient(rdb)
 
-	// Add CORS middleware
-	corsMiddleware := func(next http.HandlerFunc) http.HandlerFunc {
-		return func(w http.ResponseWriter, r *http.Request) {
-			log.Printf("[DEBUG] Received request: %s %s", r.Method, r.URL.Path)
+	// Initialize message handler with Redis client
+	messageHandler = handlers.NewMessageHandler(roomManager, rdb)
+
+	// Set up HTTP server with CORS middleware
+	r := mux.NewRouter()
+	r.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Access-Control-Allow-Origin", "*")
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 			w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
@@ -426,36 +432,42 @@ func main() {
 				return
 			}
 
-			next(w, r)
-		}
-	}
-
-	// Create a new router for HTTP endpoints
-	mux := http.NewServeMux()
-
-	// Regular HTTP endpoints
-	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-		log.Printf("[DEBUG] Health check request")
-		health(w, r)
+			next.ServeHTTP(w, r)
+		})
 	})
-	mux.HandleFunc("/userList", corsMiddleware(getUserList))
-	mux.HandleFunc("/initiator", corsMiddleware(getInitiatorStatus))
-	mux.HandleFunc("/handshake", corsMiddleware(getHandshakeStages))
-	mux.HandleFunc("/roomStatus", corsMiddleware(getRoomStatus))
-	mux.HandleFunc("/debug", corsMiddleware(getDebugInfo))
 
 	// WebSocket endpoint
-	mux.HandleFunc("/ws/", func(w http.ResponseWriter, r *http.Request) {
+	r.HandleFunc("/ws/", func(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[DEBUG] WebSocket request received: %s", r.URL.Path)
 		handleConnection(w, r)
 	})
 
+	// Regular HTTP endpoints
+	r.HandleFunc("/health", health)
+	r.HandleFunc("/debug", getDebugInfo)
+	r.HandleFunc("/handshake-stages", getHandshakeStages)
+	r.HandleFunc("/room-status", getRoomStatus)
+	r.HandleFunc("/initiator-status", getInitiatorStatus)
+
+	// Start room cleanup goroutine
 	go cleanupRooms()
 
-	log.Printf("[DEBUG] Registered endpoints: /health, /userList, /initiator, /handshake, /roomStatus, /debug, /ws/")
-	log.Printf("[DEBUG] Environment variables: REDIS_ADDR=%s, TWILIO_ACCOUNT_SID=%s", os.Getenv("REDIS_ADDR"), os.Getenv("TWILIO_ACCOUNT_SID"))
-	log.Println("Signaling service started on :8080")
-	log.Fatal(http.ListenAndServe(":8080", mux))
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
+	}
+
+	srv := &http.Server{
+		Handler:      r,
+		Addr:         ":" + port,
+		ReadTimeout:  15 * time.Second,
+		WriteTimeout: 15 * time.Second,
+	}
+
+	log.Printf("Starting server on port %s", port)
+	if err := srv.ListenAndServe(); err != nil {
+		log.Fatal(err)
+	}
 }
 
 func sendMessage(client *models.Client, messageType string, content interface{}) {

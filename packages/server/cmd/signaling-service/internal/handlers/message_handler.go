@@ -1,21 +1,24 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
 	"strings"
 	"time"
 
+	"github.com/redis/go-redis/v9"
 	"gitlab.com/secp/services/backend/cmd/signaling-service/internal/models"
 )
 
 type MessageHandler struct {
-	RoomManager *models.RoomManager
+	RoomManager *models.RoomManagerImpl
+	rdb         *redis.Client
 }
 
-func NewMessageHandler(roomManager *models.RoomManager) *MessageHandler {
-	return &MessageHandler{RoomManager: roomManager}
+func NewMessageHandler(roomManager *models.RoomManagerImpl, rdb *redis.Client) *MessageHandler {
+	return &MessageHandler{RoomManager: roomManager, rdb: rdb}
 }
 
 func (h *MessageHandler) HandleMessage(msg models.Message, client *models.Client, room *models.Room) {
@@ -385,8 +388,19 @@ func (h *MessageHandler) handleUnknownMessage(msg models.Message, client *models
 
 func (h *MessageHandler) handleStartMeeting(msg models.Message, client *models.Client, room *models.Room) {
 	// First, update room state
+	room.Mu.Lock()
 	room.MeetingStarted = true
 	room.State = "started"
+	room.Mu.Unlock()
+
+	// Persist the updated state to Redis
+	if h.rdb != nil {
+		if err := room.Save(context.Background(), h.rdb); err != nil {
+			log.Printf("[ERROR] Failed to persist room state: %v", err)
+		} else {
+			log.Printf("[DEBUG] Successfully persisted room state with MeetingStarted=true")
+		}
+	}
 
 	// Broadcast meeting started to everyone
 	startMsg := models.Message{
@@ -550,6 +564,18 @@ func (h *MessageHandler) SendInitialRoomState(client *models.Client, room *model
 	log.Printf("[DEBUG] Sending initiatorStatus message to client %s (isInitiator: %v)", client.UserID, isInitiator)
 	initiatorMsg := models.MarshalMessage("initiatorStatus", room.ID, isInitiator)
 
+	// Send meeting started status if meeting is in progress
+	if room.IsMeetingStarted() {
+		log.Printf("[DEBUG] Meeting is in progress, sending startMeeting message to client %s", client.UserID)
+		startMsg := models.MarshalMessage("startMeeting", room.ID, true)
+		select {
+		case client.Send <- startMsg:
+			log.Printf("[DEBUG] Successfully queued startMeeting message for client %s", client.UserID)
+		default:
+			log.Printf("[ERROR] Failed to queue startMeeting message for client %s - channel full", client.UserID)
+		}
+	}
+
 	log.Printf("[DEBUG] Attempting to send to client channel for %s", client.UserID)
 	select {
 	case client.Send <- initiatorMsg:
@@ -557,8 +583,6 @@ func (h *MessageHandler) SendInitialRoomState(client *models.Client, room *model
 	default:
 		log.Printf("[ERROR] Failed to queue initiatorStatus message for client %s - channel full", client.UserID)
 	}
-
-	client.Send <- messageBytes
 }
 
 func (h *MessageHandler) BroadcastUserList(room *models.Room) {
@@ -619,4 +643,38 @@ func (h *MessageHandler) handleJoinRoom(msg models.Message, client *models.Clien
 	log.Printf("[DEBUG] Broadcasting room state updates")
 	h.BroadcastUserCount(room)
 	h.BroadcastUserList(room)
+
+	// Check if meeting has already started
+	room.Mu.RLock()
+	meetingStarted := room.MeetingStarted
+	room.Mu.RUnlock()
+
+	// If meeting has already started, send startMeeting message to the new client
+	if meetingStarted {
+		log.Printf("[DEBUG] Meeting already started, sending startMeeting to new client %s", client.UserID)
+		startMsg := models.Message{
+			Type:    "startMeeting",
+			RoomID:  room.ID,
+			Content: true,
+		}
+		messageBytes, _ := json.Marshal(startMsg)
+		client.Send <- messageBytes
+		log.Printf("[DEBUG] Sent startMeeting message to client %s", client.UserID)
+
+		// Send createOffer message for existing peers
+		peers := room.GetAllPeerIDs(client.UserID)
+		log.Printf("[DEBUG] Found %d existing peers for new client %s", len(peers), client.UserID)
+		if len(peers) > 0 {
+			createOfferMsg := models.Message{
+				Type:   "createOffer",
+				RoomID: room.ID,
+				Content: map[string]interface{}{
+					"peers": peers,
+				},
+			}
+			messageBytes, _ := json.Marshal(createOfferMsg)
+			client.Send <- messageBytes
+			log.Printf("[DEBUG] Sent createOffer to new client %s with peers: %v", client.UserID[:8], peers)
+		}
+	}
 }
