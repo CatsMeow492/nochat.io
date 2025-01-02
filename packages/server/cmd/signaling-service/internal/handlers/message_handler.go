@@ -386,6 +386,7 @@ func (h *MessageHandler) handleUnknownMessage(msg models.Message, client *models
 func (h *MessageHandler) handleStartMeeting(msg models.Message, client *models.Client, room *models.Room) {
 	// First, update room state
 	room.MeetingStarted = true
+	room.State = "started"
 
 	// Broadcast meeting started to everyone
 	startMsg := models.Message{
