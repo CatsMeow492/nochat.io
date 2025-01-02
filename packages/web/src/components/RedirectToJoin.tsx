@@ -9,14 +9,35 @@ const RedirectToJoin: React.FC = () => {
   const { dispatch } = useCallSettings();
 
   useEffect(() => {
-    // Set the call intent to Join
-    dispatch({ type: "SET_CALL_INTENT", payload: CallIntent.Join });
+    const checkRoomStatus = async () => {
+      try {
+        // Check if the meeting has already started
+        const response = await fetch(`/api/roomStatus?room_id=${roomId}`);
+        const data = await response.json();
+        
+        if (data.status === "started") {
+          // If meeting has started, go directly to the active call
+          navigate(`/call/${roomId}/active`, { replace: true });
+        } else {
+          // If meeting hasn't started, set call intent to Join and redirect to join page
+          dispatch({ type: "SET_CALL_INTENT", payload: CallIntent.Join });
+          navigate('/join', { 
+            replace: true,
+            state: { roomId }
+          });
+        }
+      } catch (error) {
+        console.error('Error checking room status:', error);
+        // On error, default to join page
+        dispatch({ type: "SET_CALL_INTENT", payload: CallIntent.Join });
+        navigate('/join', { 
+          replace: true,
+          state: { roomId }
+        });
+      }
+    };
 
-    // Redirect to the join page with the room ID in state
-    navigate('/join', { 
-      replace: true,
-      state: { roomId }
-    });
+    checkRoomStatus();
   }, [navigate, roomId, dispatch]);
 
   return null;
