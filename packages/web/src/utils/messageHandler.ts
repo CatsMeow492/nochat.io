@@ -59,6 +59,13 @@ const logMsg = (type: string, msg: string, data?: any) => {
 
 const ensureLocalMedia = async (deps: MessageHandlerDependencies) => {
     const mediaStore = useMediaStore.getState();
+    logMsg('MEDIA', `Ensuring local media - current state:
+        mediaReady: ${mediaStore.mediaReady}
+        localStream: ${mediaStore.localStream ? 'exists' : 'null'}
+        audioEnabled: ${mediaStore.audioEnabled}
+        videoEnabled: ${mediaStore.videoEnabled}
+    `);
+
     if (!mediaStore.localStream) {
         logMsg('MEDIA', 'Requesting local media access');
         try {
@@ -66,15 +73,19 @@ const ensureLocalMedia = async (deps: MessageHandlerDependencies) => {
                 video: true, 
                 audio: true 
             });
+            logMsg('MEDIA', 'Got local stream, setting in store');
             mediaStore.setLocalStream(stream);
             mediaStore.setMediaReady(true);
-            logMsg('MEDIA', `Got local stream with ${stream.getTracks().length} tracks`);
+            logMsg('MEDIA', `Local stream ready with ${stream.getTracks().length} tracks:
+                ${stream.getTracks().map(t => `${t.kind}(${t.enabled})`).join(', ')}
+            `);
             return stream;
         } catch (error) {
             logMsg('ERROR', `Failed to get local media: ${error}`);
             throw error;
         }
     }
+    logMsg('MEDIA', 'Using existing local stream');
     return mediaStore.localStream;
 };
 
@@ -494,8 +505,23 @@ const updateConnectionState = (peerId: string, state: PeerConnectionState, deps:
 
 // At the top with other state variables
 const peersWithOffers = new Set<string>();
+let pendingPeersForMedia: string[] = [];
 
 export const createMessageHandler = (deps: MessageHandlerDependencies) => {
+    // Add subscription to handle queued peers when media becomes ready
+    useMediaStore.subscribe((state) => {
+        if (state.mediaReady && state.localStream && pendingPeersForMedia.length > 0) {
+            logMsg('MEDIA', `Media now ready, processing ${pendingPeersForMedia.length} queued peers`);
+            deps.sendMessage('createOffer', { peers: pendingPeersForMedia });
+            pendingPeersForMedia = [];
+        }
+    });
+
+    // Update setPendingPeers in the createOffer case
+    deps.setState.setPendingPeers = (peers: string[]) => {
+        pendingPeersForMedia = peers;
+    };
+
     return async (message: WebSocketMessage) => {
         const currentState = deps.getState();
         const mediaStore = useMediaStore.getState();
@@ -535,7 +561,23 @@ export const createMessageHandler = (deps: MessageHandlerDependencies) => {
                 
                 logMsg('OFFER', `Creating for ${newPeers.length} peers: ${newPeers.map(short).join(', ')}`);
                 
-                if (mediaStore.mediaReady) {
+                const mediaState = useMediaStore.getState();
+                logMsg('MEDIA', `Current media state:
+                    mediaReady: ${mediaState.mediaReady}
+                    localStream: ${mediaState.localStream ? 'exists' : 'null'}
+                    ${mediaState.localStream ? `tracks: ${mediaState.localStream.getTracks().map((t: MediaStreamTrack) => `${t.kind}(${t.enabled})`).join(', ')}` : ''}
+                    audioEnabled: ${mediaState.audioEnabled}
+                    videoEnabled: ${mediaState.videoEnabled}
+                `);
+                
+                const createOffersForPeers = async () => {
+                    const updatedMediaState = useMediaStore.getState();
+                    if (!updatedMediaState.mediaReady || !updatedMediaState.localStream) {
+                        logMsg('WAIT', `Media not ready yet, queueing ${newPeers.length} peers`);
+                        deps.setState.setPendingPeers(newPeers);
+                        return;
+                    }
+
                     for (const peerId of newPeers) {
                         if (!deps.peerConnections.has(peerId)) {
                             try {
@@ -597,9 +639,21 @@ export const createMessageHandler = (deps: MessageHandlerDependencies) => {
                             logMsg('SKIP', `Already have connection to peer ${peerId}`);
                         }
                     }
+                };
+
+                if (!mediaState.mediaReady || !mediaState.localStream) {
+                    logMsg('MEDIA', 'Media not ready, attempting to get media access');
+                    try {
+                        await ensureLocalMedia(deps);
+                        // After getting media, try to create offers
+                        await createOffersForPeers();
+                    } catch (error) {
+                        logMsg('ERROR', `Failed to get media access: ${error}`);
+                        return;
+                    }
                 } else {
-                    logMsg('WAIT', `Media not ready, queueing ${newPeers.length} peers`);
-                    deps.setState.setPendingPeers(newPeers);
+                    // Media is already ready, create offers directly
+                    await createOffersForPeers();
                 }
                 break;
             }

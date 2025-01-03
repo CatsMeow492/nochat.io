@@ -14,6 +14,15 @@ import { getWebSocketURL } from './config/webrtc';
 import { createMessageHandler } from './utils/messageHandler';
 import websocketService from './services/websocket';
 import { WebRTCState } from './types/chat';
+import { useMediaStore } from './store/mediaStore';
+
+declare global {
+  interface Window {
+    debugState: {
+      getMediaStore: () => any;
+    };
+  }
+}
 
 const generateTempUserId = () => {
   return 'anon_' + Math.random().toString(36).substr(2, 9);
@@ -213,6 +222,12 @@ function App() {
       websocketService.setSocket(null);
     };
   }, [connectWebSocket, messageHandler]);
+
+  useEffect(() => {
+    window.debugState = {
+      getMediaStore: () => useMediaStore.getState()
+    };
+  }, []);
 
   return <RouterProvider router={router} />;
 }

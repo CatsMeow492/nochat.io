@@ -132,15 +132,26 @@ const CallView = () => {
   useEffect(() => {
     const setupMedia = async () => {
       try {
+        console.log('[MEDIA] Requesting user media...');
         const stream = await navigator.mediaDevices.getUserMedia({ 
           video: true, 
           audio: true 
         });
+        console.log('[MEDIA] Got stream:', {
+          tracks: stream.getTracks().map(t => ({
+            kind: t.kind,
+            enabled: t.enabled,
+            state: t.readyState
+          }))
+        });
         useMediaStore.getState().setLocalStream(stream);
         useMediaStore.getState().setMediaReady(true);
+        console.log('[MEDIA] Media ready set to true');
       } catch (error) {
-        console.error('Failed to get local media:', error);
-        useMediaStore.getState().setMediaReady(true); // Allow proceeding even if media fails
+        console.error('[MEDIA] Failed to get local media:', error);
+        // Don't set mediaReady to true if we failed to get media
+        useMediaStore.getState().setMediaReady(false);
+        console.log('[MEDIA] Media ready set to false due to error');
       }
     };
 

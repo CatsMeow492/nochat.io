@@ -571,6 +571,18 @@ func (h *MessageHandler) SendInitialRoomState(client *models.Client, room *model
 		select {
 		case client.Send <- startMsg:
 			log.Printf("[DEBUG] Successfully queued startMeeting message for client %s", client.UserID)
+			// Tell the new client to create an offer for the existing peers
+			peers := room.GetAllPeerIDs(client.UserID)
+			createOfferMsg := models.Message{
+				Type:   "createOffer",
+				RoomID: room.ID,
+				Content: map[string]interface{}{
+					"peers": peers,
+				},
+			}
+			messageBytes, _ := json.Marshal(createOfferMsg)
+			client.Send <- messageBytes
+			log.Printf("[DEBUG] Sent createOffer message to client %s with peers: %v", client.UserID[:8], peers)
 		default:
 			log.Printf("[ERROR] Failed to queue startMeeting message for client %s - channel full", client.UserID)
 		}
