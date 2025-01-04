@@ -1,0 +1,60 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: auth-ingress
+  namespace: nochat
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    nginx.ingress.kubernetes.io/enable-cors: "true"
+    nginx.ingress.kubernetes.io/cors-allow-methods: "GET, POST, PUT, DELETE, OPTIONS"
+    nginx.ingress.kubernetes.io/cors-allow-origin: "https://localhost:3000, https://nochat.io"
+    nginx.ingress.kubernetes.io/cors-allow-credentials: "true"
+    nginx.ingress.kubernetes.io/cors-allow-headers: "Content-Type, Authorization"
+    nginx.ingress.kubernetes.io/cors-max-age: "86400"
+spec:
+  rules:
+  - host: nochat.io
+    http:
+      paths:
+      - path: /api/auth/register
+        pathType: Exact
+        backend:
+          service:
+            name: nochat-users
+            port:
+              number: 8083
+      - path: /api/auth/login
+        pathType: Exact
+        backend:
+          service:
+            name: nochat-users
+            port:
+              number: 8083
+      - path: /api/auth/verify-email
+        pathType: Exact
+        backend:
+          service:
+            name: nochat-users
+            port:
+              number: 8083
+      - path: /api/auth/request-password-reset
+        pathType: Exact
+        backend:
+          service:
+            name: nochat-users
+            port:
+              number: 8083
+      - path: /api/auth/reset-password
+        pathType: Exact
+        backend:
+          service:
+            name: nochat-users
+            port:
+              number: 8083
+      - path: /api/auth/logout
+        pathType: Exact
+        backend:
+          service:
+            name: nochat-users
+            port:
+              number: 8083 

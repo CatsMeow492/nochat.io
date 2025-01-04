@@ -3,7 +3,6 @@ import { useNavigate } from 'react-router-dom';
 import { Mic, Computer as ComputerIcon, Videocam as VideocamIcon } from '@mui/icons-material';
 import { Box, Typography, Button } from '@mui/material';
 import ThreeBackground from '../components/Background/webgl_background';
-import AppBar from '../components/appbar';
 import ContactsList from '../components/ContactsList';
 import websocketService from '../services/websocket';
 
@@ -70,7 +69,6 @@ const Splash: React.FC = () => {
 
   return (
     <Box component="div">
-      <AppBar />
       {showBackground && <ThreeBackground />}
       <Box
         sx={{

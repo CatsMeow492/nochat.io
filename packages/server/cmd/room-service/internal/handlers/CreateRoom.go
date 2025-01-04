@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"github.com/CatsMeow492/nochat.io/packages/server/cmd/room-service/internal/models"
 	"github.com/redis/go-redis/v9"
-	"gitlab.com/secp/services/backend/cmd/room-service/internal/models"
 )
 
 // CreateRoom handles the creation of a new room.

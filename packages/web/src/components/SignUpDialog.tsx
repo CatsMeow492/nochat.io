@@ -1,17 +1,21 @@
-import { Dialog, DialogTitle, DialogContent, DialogActions, Button, TextField, Box } from '@mui/material';
+import { Dialog, DialogTitle, DialogContent, DialogActions, Button, Box, TextField } from '@mui/material';
 import { useState } from 'react';
 
 interface SignUpDialogProps {
   open: boolean;
   onClose: () => void;
-  onSignUp: (email: string, name: string) => void;
+  onSignUp: (email: string, name: string, password: string) => void;
 }
 
 function SignUpDialog({ open, onClose, onSignUp }: SignUpDialogProps) {
   const [email, setEmail] = useState('');
   const [name, setName] = useState('');
+  const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [emailError, setEmailError] = useState('');
   const [nameError, setNameError] = useState('');
+  const [passwordError, setPasswordError] = useState('');
+  const [confirmPasswordError, setConfirmPasswordError] = useState('');
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -19,6 +23,8 @@ function SignUpDialog({ open, onClose, onSignUp }: SignUpDialogProps) {
     // Reset errors
     setEmailError('');
     setNameError('');
+    setPasswordError('');
+    setConfirmPasswordError('');
 
     // Validate inputs
     let hasError = false;
@@ -35,29 +41,36 @@ function SignUpDialog({ open, onClose, onSignUp }: SignUpDialogProps) {
       hasError = true;
     }
 
+    if (!password) {
+      setPasswordError('Password is required');
+      hasError = true;
+    } else if (password.length < 8) {
+      setPasswordError('Password must be at least 8 characters');
+      hasError = true;
+    }
+
+    if (!confirmPassword) {
+      setConfirmPasswordError('Please confirm your password');
+      hasError = true;
+    } else if (password !== confirmPassword) {
+      setConfirmPasswordError('Passwords do not match');
+      hasError = true;
+    }
+
     if (hasError) return;
 
-    // Check if email exists
-    try {
-      const res = await fetch(`https://nochat.io/api/users/check-email?email=${encodeURIComponent(email)}`);
-      const data = await res.json();
-      
-      if (data.exists) {
-        setEmailError('Email already exists');
-        return;
-      }
-
-      onSignUp(email, name);
-    } catch (err) {
-      console.error('Error checking email:', err);
-    }
+    onSignUp(email, name, password);
   };
 
   const handleClose = () => {
     setEmail('');
     setName('');
+    setPassword('');
+    setConfirmPassword('');
     setEmailError('');
     setNameError('');
+    setPasswordError('');
+    setConfirmPasswordError('');
     onClose();
   };
 
@@ -83,6 +96,24 @@ function SignUpDialog({ open, onClose, onSignUp }: SignUpDialogProps) {
               onChange={(e) => setName(e.target.value)}
               error={!!nameError}
               helperText={nameError}
+              fullWidth
+            />
+            <TextField
+              label="Password"
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              error={!!passwordError}
+              helperText={passwordError}
+              fullWidth
+            />
+            <TextField
+              label="Confirm Password"
+              type="password"
+              value={confirmPassword}
+              onChange={(e) => setConfirmPassword(e.target.value)}
+              error={!!confirmPasswordError}
+              helperText={confirmPasswordError}
               fullWidth
             />
           </Box>

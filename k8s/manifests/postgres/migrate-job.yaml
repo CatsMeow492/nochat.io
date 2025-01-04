@@ -1,0 +1,51 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: db-migrate
+  namespace: nochat
+spec:
+  template:
+    spec:
+      containers:
+      - name: migrate
+        image: postgres:15
+        command: ["psql"]
+        args:
+          - "-h"
+          - "$(DB_HOST)"
+          - "-U"
+          - "$(DB_USER)"
+          - "-d"
+          - "$(DB_NAME)"
+          - "-f"
+          - "/migrations/004_add_login_attempts.sql"
+        env:
+          - name: PGPASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: postgres-secret
+                key: password
+          - name: DB_HOST
+            valueFrom:
+              configMapKeyRef:
+                name: postgres-config
+                key: host
+          - name: DB_USER
+            valueFrom:
+              configMapKeyRef:
+                name: postgres-config
+                key: user
+          - name: DB_NAME
+            valueFrom:
+              configMapKeyRef:
+                name: postgres-config
+                key: dbname
+        volumeMounts:
+          - name: migrations
+            mountPath: /migrations
+      volumes:
+        - name: migrations
+          configMap:
+            name: postgres-migrations
+      restartPolicy: Never
+  backoffLimit: 4 

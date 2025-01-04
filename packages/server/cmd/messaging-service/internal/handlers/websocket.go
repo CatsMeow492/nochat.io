@@ -5,7 +5,7 @@ import (
 	"net/http"
 
 	"github.com/gorilla/websocket"
-	"gitlab.com/secp/services/backend/cmd/messaging-service/internal/models"
+	"github.com/CatsMeow492/nochat.io/packages/server/cmd/messaging-service/internal/models"
 )
 
 func ServeWs(hub *models.Hub, w http.ResponseWriter, r *http.Request, upgrader websocket.Upgrader) {

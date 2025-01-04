@@ -9,9 +9,9 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/gorilla/websocket"
-	"gitlab.com/secp/services/backend/cmd/messaging-service/internal/config"
-	"gitlab.com/secp/services/backend/cmd/messaging-service/internal/handlers"
-	"gitlab.com/secp/services/backend/cmd/messaging-service/internal/models"
+	"github.com/CatsMeow492/nochat.io/packages/server/cmd/messaging-service/internal/config"
+	"github.com/CatsMeow492/nochat.io/packages/server/cmd/messaging-service/internal/handlers"
+	"github.com/CatsMeow492/nochat.io/packages/server/cmd/messaging-service/internal/models"
 )
 
 var upgrader = websocket.Upgrader{

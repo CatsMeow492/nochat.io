@@ -30,20 +30,41 @@ spec:
   - host: nochat.io
     http:
       paths:
-      - path: /ws/
-        pathType: Prefix
-        backend:
-          service:
-            name: nochat-signaling
-            port:
-              number: 8080
-      - path: /health
+      - path: /api/users/login
         pathType: Exact
         backend:
           service:
-            name: nochat-signaling
+            name: nochat-users
             port:
-              number: 8080
+              number: 8083
+      - path: /api/users/logout
+        pathType: Exact
+        backend:
+          service:
+            name: nochat-users
+            port:
+              number: 8083
+      - path: /api/users/verify-email
+        pathType: Exact
+        backend:
+          service:
+            name: nochat-users
+            port:
+              number: 8083
+      - path: /api/users/request-password-reset
+        pathType: Exact
+        backend:
+          service:
+            name: nochat-users
+            port:
+              number: 8083
+      - path: /api/users/reset-password
+        pathType: Exact
+        backend:
+          service:
+            name: nochat-users
+            port:
+              number: 8083
       - path: /api/users/check-wallet
         pathType: Exact
         backend:
@@ -52,13 +73,6 @@ spec:
             port:
               number: 8083
       - path: /api/users/by-wallet
-        pathType: Exact
-        backend:
-          service:
-            name: nochat-users
-            port:
-              number: 8083
-      - path: /api/users/check-email
         pathType: Exact
         backend:
           service:
@@ -100,6 +114,20 @@ spec:
             name: nochat-contacts
             port:
               number: 8082
+      - path: /ws/
+        pathType: Prefix
+        backend:
+          service:
+            name: nochat-signaling
+            port:
+              number: 8080
+      - path: /health
+        pathType: Exact
+        backend:
+          service:
+            name: nochat-signaling
+            port:
+              number: 8080
       - path: /
         pathType: Prefix
         backend:

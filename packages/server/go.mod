@@ -1,4 +1,4 @@
-module gitlab.com/secp/services/backend
+module github.com/CatsMeow492/nochat.io/packages/server
 
 go 1.20
 
@@ -9,9 +9,11 @@ require (
 	github.com/twilio/twilio-go v1.23.8
 )
 
+require golang.org/x/crypto v0.31.0
+
 require (
 	github.com/golang/mock v1.6.0 // indirect
-	github.com/lib/pq v1.10.9 // indirect
+	github.com/lib/pq v1.10.9
 	github.com/pkg/errors v0.9.1 // indirect
 	golang.org/x/net v0.23.0 // indirect
 )
@@ -22,5 +24,4 @@ require (
 	github.com/fsnotify/fsnotify v1.7.0 // indirect
 	github.com/go-redis/redis/v8 v8.11.5
 	github.com/google/uuid v1.6.0
-	golang.org/x/sys v0.18.0 // indirect
 )

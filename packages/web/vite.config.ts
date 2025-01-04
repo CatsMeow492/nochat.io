@@ -5,6 +5,7 @@ export default defineConfig({
   plugins: [react()],
   server: {
     host: '0.0.0.0',  // Allow access from network
-    port: 3000        // Optional: specify port
+    port: 3000,       // Optional: specify port
+    https: true,      // Enable HTTPS
   }
 }) 

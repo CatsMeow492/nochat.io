@@ -5,17 +5,22 @@ import (
 	"net/http"
 	"os"
 
-	"gitlab.com/secp/services/backend/pkg/handlers"
+	"github.com/CatsMeow492/nochat.io/packages/server/pkg/handlers"
 )
 
 func main() {
 	log.Printf("[DEBUG] Starting ICE service...")
 
-	// Initialize ICE handler
+	// Get Twilio credentials from environment variables
 	accountSid := os.Getenv("TWILIO_ACCOUNT_SID")
 	authToken := os.Getenv("TWILIO_AUTH_TOKEN")
 
-	log.Printf("[DEBUG] Initializing ICE handler with account SID: %s", accountSid)
+	if accountSid == "" || authToken == "" {
+		log.Fatal("[ERROR] Missing Twilio credentials. Please set TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN")
+	}
+
+	// Initialize ICE handler with credentials
+	log.Printf("[DEBUG] Initializing ICE handler with account SID: %s", accountSid[:8]+"...")
 	iceHandler := handlers.NewIceHandler(accountSid, authToken)
 
 	// Create a new router
@@ -45,7 +50,7 @@ func main() {
 		w.Write([]byte("OK"))
 	})
 
-	// ICE servers endpoint
+	// ICE servers endpoint with CORS and logging
 	mux.HandleFunc("/api/ice-servers", corsMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[DEBUG] Handling ice-servers request from %s", r.RemoteAddr)
 		if r.Method != http.MethodGet {
@@ -56,10 +61,17 @@ func main() {
 		iceHandler.GetIceServers(w, r)
 	}))
 
-	log.Printf("[DEBUG] Environment variables: TWILIO_ACCOUNT_SID=%s", accountSid)
-	log.Printf("[DEBUG] Registered endpoints: /health, /api/ice-servers")
-	log.Printf("[DEBUG] Starting server on :8081...")
-	if err := http.ListenAndServe(":8081", mux); err != nil {
+	// Log configuration details
+	log.Printf("[INFO] Environment variables:")
+	log.Printf("  - TWILIO_ACCOUNT_SID: %s...", accountSid[:8])
+	log.Printf("[INFO] Registered endpoints:")
+	log.Printf("  - /health")
+	log.Printf("  - /api/ice-servers")
+
+	// Start the server
+	port := ":8081"
+	log.Printf("[INFO] Starting server on %s...", port)
+	if err := http.ListenAndServe(port, mux); err != nil {
 		log.Fatalf("[ERROR] Failed to start server: %v", err)
 	}
 }

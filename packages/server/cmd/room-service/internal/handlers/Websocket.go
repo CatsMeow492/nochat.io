@@ -6,8 +6,8 @@ import (
 	"net/http"
 
 	"github.com/gorilla/websocket"
+	"github.com/CatsMeow492/nochat.io/packages/server/cmd/room-service/internal/models"
 	"github.com/redis/go-redis/v9"
-	"gitlab.com/secp/services/backend/cmd/room-service/internal/models"
 )
 
 var upgrader = websocket.Upgrader{

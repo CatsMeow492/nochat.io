@@ -9,10 +9,10 @@ import (
 	"syscall"
 
 	"github.com/gorilla/mux"
+	"github.com/CatsMeow492/nochat.io/packages/server/cmd/room-service/internal/config"
+	"github.com/CatsMeow492/nochat.io/packages/server/cmd/room-service/internal/handlers"
+	"github.com/CatsMeow492/nochat.io/packages/server/cmd/room-service/internal/models"
 	"github.com/redis/go-redis/v9"
-	"gitlab.com/secp/services/backend/cmd/room-service/internal/config"
-	"gitlab.com/secp/services/backend/cmd/room-service/internal/handlers"
-	"gitlab.com/secp/services/backend/cmd/room-service/internal/models"
 )
 
 func main() {

@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/CatsMeow492/nochat.io/packages/server/cmd/signaling-service/internal/models"
 	"github.com/redis/go-redis/v9"
-	"gitlab.com/secp/services/backend/cmd/signaling-service/internal/models"
 )
 
 type MessageHandler struct {

@@ -1,0 +1,42 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-migrations
+  namespace: nochat
+data:
+  002_add_password_hash.sql: |
+    ALTER TABLE users ADD COLUMN password_hash VARCHAR(255);
+
+    -- Update the check constraint to allow email+password or wallet_address
+    ALTER TABLE users DROP CONSTRAINT users_email_check;
+    ALTER TABLE users ADD CONSTRAINT users_auth_check CHECK (
+        (email IS NOT NULL AND password_hash IS NOT NULL AND wallet_address IS NULL) OR
+        (email IS NULL AND password_hash IS NULL AND wallet_address IS NOT NULL)
+    );
+  003_add_verification_fields.sql: |
+    ALTER TABLE users ADD COLUMN email_verification_token VARCHAR(255);
+    ALTER TABLE users ADD COLUMN email_verified BOOLEAN DEFAULT FALSE;
+    ALTER TABLE users ADD COLUMN email_verification_expires_at TIMESTAMP;
+  004_add_login_attempts.sql: |
+    CREATE TABLE IF NOT EXISTS login_attempts (
+        id SERIAL PRIMARY KEY,
+        email VARCHAR(255) NOT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT NOW()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_login_attempts_email_created_at ON login_attempts (email, created_at);
+
+    -- Add unique constraint on email
+    ALTER TABLE users ADD CONSTRAINT users_email_unique UNIQUE (email);
+
+    CREATE TABLE IF NOT EXISTS sessions (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        token TEXT NOT NULL UNIQUE,
+        expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_sessions_token ON sessions(token);
+    CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id); 

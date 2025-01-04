@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-config
+  namespace: nochat
+data:
+  host: postgres
+  user: postgres
+  dbname: nochat 

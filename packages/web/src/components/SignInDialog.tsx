@@ -1,51 +1,54 @@
-import { Dialog, DialogTitle, DialogContent, DialogActions, Button, TextField, Box } from '@mui/material';
+import { Dialog, DialogTitle, DialogContent, DialogActions, Button, Box, TextField } from '@mui/material';
 import { useState } from 'react';
 
 interface SignInDialogProps {
   open: boolean;
   onClose: () => void;
-  onSignIn: (email: string) => void;
+  onSignIn: (email: string, password: string) => void;
 }
 
 function SignInDialog({ open, onClose, onSignIn }: SignInDialogProps) {
   const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [emailError, setEmailError] = useState('');
+  const [passwordError, setPasswordError] = useState('');
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
-    // Reset error
+    // Reset errors
     setEmailError('');
+    setPasswordError('');
 
     // Validate input
+    let hasError = false;
     if (!email) {
       setEmailError('Email is required');
-      return;
+      hasError = true;
     }
     if (!email.includes('@')) {
       setEmailError('Invalid email format');
-      return;
+      hasError = true;
+    }
+    if (!password) {
+      setPasswordError('Password is required');
+      hasError = true;
+    }
+    if (password.length < 8) {
+      setPasswordError('Password must be at least 8 characters');
+      hasError = true;
     }
 
-    // Check if email exists
-    try {
-      const res = await fetch(`https://nochat.io/api/users/check-email?email=${encodeURIComponent(email)}`);
-      const data = await res.json();
-      
-      if (!data.exists) {
-        setEmailError('Email not found');
-        return;
-      }
+    if (hasError) return;
 
-      onSignIn(email);
-    } catch (err) {
-      console.error('Error checking email:', err);
-    }
+    onSignIn(email, password);
   };
 
   const handleClose = () => {
     setEmail('');
+    setPassword('');
     setEmailError('');
+    setPasswordError('');
     onClose();
   };
 
@@ -64,6 +67,15 @@ function SignInDialog({ open, onClose, onSignIn }: SignInDialogProps) {
               helperText={emailError}
               fullWidth
               autoFocus
+            />
+            <TextField
+              label="Password"
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              error={!!passwordError}
+              helperText={passwordError}
+              fullWidth
             />
           </Box>
         </DialogContent>
