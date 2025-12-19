@@ -242,10 +242,10 @@ func (s *Service) handleOffer(client *Client, msg models.WSMessage) {
 		return
 	}
 
-	content["fromPeerID"] = client.ID
+	content["fromPeerID"] = client.UserID.String()
 
 	// Store signaling state
-	s.storeSignalingState(client.Room, targetPeerID, client.ID, "offer", content)
+	s.storeSignalingState(client.Room, targetPeerID, client.UserID.String(), "offer", content)
 
 	// Forward offer to target peer
 	s.forwardToPeer(client.Room, targetPeerID, models.WSMessage{
@@ -271,7 +271,7 @@ func (s *Service) handleAnswer(client *Client, msg models.WSMessage) {
 		return
 	}
 
-	content["fromPeerId"] = client.ID
+	content["fromPeerId"] = client.UserID.String()
 
 	// Forward answer to target peer
 	s.forwardToPeer(client.Room, targetPeerID, models.WSMessage{
@@ -295,17 +295,17 @@ func (s *Service) handleICECandidate(client *Client, msg models.WSMessage) {
 	}
 
 	// Prevent self-targeting
-	if targetPeerID == client.ID {
+	if targetPeerID == client.UserID.String() {
 		return
 	}
 
-	content["fromPeerId"] = client.ID
+	content["fromPeerId"] = client.UserID.String()
 
 	// Check if we have a pending offer
 	room := client.Room
-	if !s.hasPendingOffer(room, targetPeerID, client.ID) {
+	if !s.hasPendingOffer(room, targetPeerID, client.UserID.String()) {
 		log.Printf("[Signaling] No pending offer, queueing ICE candidate")
-		s.queueICECandidate(room, targetPeerID, client.ID, content)
+		s.queueICECandidate(room, targetPeerID, client.UserID.String(), content)
 		return
 	}
 
