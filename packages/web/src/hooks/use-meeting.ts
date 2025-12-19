@@ -194,7 +194,8 @@ export function useMeeting(roomId: string) {
   }, [createPeerConnection, roomId]);
 
   // Initialize media and WebSocket
-  const connect = useCallback(async () => {
+  // optionalUserId can be passed directly to avoid race conditions with store updates
+  const connect = useCallback(async (optionalUserId?: string) => {
     try {
       // Get local media
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -204,15 +205,15 @@ export function useMeeting(roomId: string) {
       localStreamRef.current = stream;
       setLocalStream(stream);
 
-      // Get the latest user from store (synchronous, always up-to-date)
-      const currentUser = useAuthStore.getState().user;
+      // Use provided userId or get from store
+      const userId = optionalUserId || useAuthStore.getState().user?.id;
 
-      if (!currentUser?.id) {
+      if (!userId) {
         throw new Error("User not authenticated. Please sign in first.");
       }
 
       // Connect WebSocket
-      const wsUrl = `${WS_URL}/api/signaling?user_id=${currentUser.id}&room_id=${roomId}`;
+      const wsUrl = `${WS_URL}/api/signaling?user_id=${userId}&room_id=${roomId}`;
       const ws = new WebSocket(wsUrl);
 
       ws.onopen = () => {

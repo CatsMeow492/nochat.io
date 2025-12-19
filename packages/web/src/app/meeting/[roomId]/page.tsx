@@ -114,10 +114,13 @@ export default function MeetingPage() {
   const handleJoin = async () => {
     setIsJoining(true);
     try {
+      let userId = user?.id;
+
       // If user is not authenticated, sign in anonymously first
-      if (!user) {
+      if (!userId) {
         const response = await api.signInAnonymous();
         localStorage.setItem("token", response.token);
+        userId = response.user.id;
         setUser(
           {
             id: response.user.id,
@@ -130,7 +133,8 @@ export default function MeetingPage() {
           response.token
         );
       }
-      await connect();
+      // Pass userId directly to avoid race conditions with store updates
+      await connect(userId);
       setHasJoined(true);
     } catch (error) {
       console.error("Failed to join meeting:", error);
