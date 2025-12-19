@@ -21,12 +21,18 @@ import {
   Copy,
   Check,
   Link2,
+  Sparkles,
 } from "lucide-react";
 import { useMeeting } from "@/hooks/use-meeting";
 import { useAuth } from "@/hooks";
 import { api } from "@/lib/api";
 import { useAuthStore } from "@/stores";
 import { cn } from "@/lib/utils";
+import {
+  VideoEffectsSelector,
+  useVideoEffects,
+  type BackgroundEffect,
+} from "@/components/video-effects";
 
 // Corner positions for the PiP window
 type Corner = "top-left" | "top-right" | "bottom-left" | "bottom-right";
@@ -237,6 +243,7 @@ export default function MeetingPage() {
   const [copied, setCopied] = useState(false);
   const [hasJoined, setHasJoined] = useState(false);
   const [isJoining, setIsJoining] = useState(false);
+  const [backgroundEffect, setBackgroundEffect] = useState<BackgroundEffect>("none");
 
   const {
     localStream,
@@ -249,6 +256,9 @@ export default function MeetingPage() {
     toggleMute,
     toggleVideo,
   } = useMeeting(roomId);
+
+  // Apply video effects to local stream
+  const processedLocalStream = useVideoEffects(localStream, backgroundEffect);
 
   // Generate shareable link
   const meetingLink = typeof window !== "undefined"
@@ -441,7 +451,7 @@ export default function MeetingPage() {
               <div className="text-center space-y-6">
                 <div className="w-64 h-48 sm:w-80 sm:h-60 mx-auto">
                   <VideoTile
-                    stream={localStream}
+                    stream={processedLocalStream}
                     muted
                     label={user?.username || "You"}
                     isLocal
@@ -480,7 +490,7 @@ export default function MeetingPage() {
 
               {/* Local video PiP - draggable to corners */}
               <LocalVideoPiP
-                stream={localStream}
+                stream={processedLocalStream}
                 label={user?.username || "You"}
                 isMuted={isMuted}
                 isVideoOff={isVideoOff}
@@ -519,6 +529,19 @@ export default function MeetingPage() {
               </Button>
             </TooltipTrigger>
             <TooltipContent>{isVideoOff ? "Turn on camera" : "Turn off camera"}</TooltipContent>
+          </Tooltip>
+
+          {/* Effects */}
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <div>
+                <VideoEffectsSelector
+                  currentEffect={backgroundEffect}
+                  onEffectChange={setBackgroundEffect}
+                />
+              </div>
+            </TooltipTrigger>
+            <TooltipContent>Video effects</TooltipContent>
           </Tooltip>
 
           {/* Leave */}
