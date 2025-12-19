@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -29,16 +29,22 @@ import { api } from "@/lib/api";
 import { useAuthStore } from "@/stores";
 import { cn } from "@/lib/utils";
 
+// Corner positions for the PiP window
+type Corner = "top-left" | "top-right" | "bottom-left" | "bottom-right";
+
+// Remote video tile component
 function VideoTile({
   stream,
   muted = false,
   label,
   isLocal = false,
+  className,
 }: {
   stream: MediaStream | null;
   muted?: boolean;
   label: string;
   isLocal?: boolean;
+  className?: string;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
 
@@ -49,7 +55,7 @@ function VideoTile({
   }, [stream]);
 
   return (
-    <div className="relative aspect-video bg-secondary/50 rounded-xl overflow-hidden">
+    <div className={cn("relative bg-secondary/50 rounded-xl overflow-hidden", className)}>
       {stream ? (
         <video
           ref={videoRef}
@@ -70,8 +76,154 @@ function VideoTile({
           </div>
         </div>
       )}
-      <div className="absolute bottom-3 left-3 px-2 py-1 rounded bg-black/50 text-white text-sm">
+      <div className="absolute bottom-2 left-2 px-2 py-1 rounded bg-black/50 text-white text-xs">
         {label}
+      </div>
+    </div>
+  );
+}
+
+// Draggable Picture-in-Picture local video component
+function LocalVideoPiP({
+  stream,
+  label,
+  isMuted,
+  isVideoOff,
+}: {
+  stream: MediaStream | null;
+  label: string;
+  isMuted: boolean;
+  isVideoOff: boolean;
+}) {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const [corner, setCorner] = useState<Corner>("bottom-right");
+  const [isDragging, setIsDragging] = useState(false);
+  const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (videoRef.current && stream) {
+      videoRef.current.srcObject = stream;
+    }
+  }, [stream]);
+
+  // Calculate which corner is closest to the current position
+  const snapToCorner = useCallback((clientX: number, clientY: number) => {
+    const viewportWidth = window.innerWidth;
+    const viewportHeight = window.innerHeight;
+
+    const isLeft = clientX < viewportWidth / 2;
+    const isTop = clientY < viewportHeight / 2;
+
+    if (isTop && isLeft) return "top-left";
+    if (isTop && !isLeft) return "top-right";
+    if (!isTop && isLeft) return "bottom-left";
+    return "bottom-right";
+  }, []);
+
+  const handleMouseDown = (e: React.MouseEvent) => {
+    setIsDragging(true);
+    setDragStart({ x: e.clientX, y: e.clientY });
+  };
+
+  const handleMouseMove = useCallback((e: MouseEvent) => {
+    if (!isDragging) return;
+    // Visual feedback could be added here
+  }, [isDragging]);
+
+  const handleMouseUp = useCallback((e: MouseEvent) => {
+    if (!isDragging) return;
+    setIsDragging(false);
+    setCorner(snapToCorner(e.clientX, e.clientY));
+  }, [isDragging, snapToCorner]);
+
+  const handleTouchStart = (e: React.TouchEvent) => {
+    const touch = e.touches[0];
+    setIsDragging(true);
+    setDragStart({ x: touch.clientX, y: touch.clientY });
+  };
+
+  const handleTouchEnd = useCallback((e: TouchEvent) => {
+    if (!isDragging) return;
+    setIsDragging(false);
+    const touch = e.changedTouches[0];
+    setCorner(snapToCorner(touch.clientX, touch.clientY));
+  }, [isDragging, snapToCorner]);
+
+  // Click to cycle through corners
+  const handleClick = () => {
+    const corners: Corner[] = ["bottom-right", "bottom-left", "top-left", "top-right"];
+    const currentIndex = corners.indexOf(corner);
+    const nextIndex = (currentIndex + 1) % corners.length;
+    setCorner(corners[nextIndex]);
+  };
+
+  useEffect(() => {
+    if (isDragging) {
+      window.addEventListener("mousemove", handleMouseMove);
+      window.addEventListener("mouseup", handleMouseUp);
+      window.addEventListener("touchend", handleTouchEnd);
+      return () => {
+        window.removeEventListener("mousemove", handleMouseMove);
+        window.removeEventListener("mouseup", handleMouseUp);
+        window.removeEventListener("touchend", handleTouchEnd);
+      };
+    }
+  }, [isDragging, handleMouseMove, handleMouseUp, handleTouchEnd]);
+
+  const cornerStyles: Record<Corner, string> = {
+    "top-left": "top-20 left-4",
+    "top-right": "top-20 right-4",
+    "bottom-left": "bottom-24 left-4",
+    "bottom-right": "bottom-24 right-4",
+  };
+
+  return (
+    <div
+      ref={containerRef}
+      className={cn(
+        "absolute z-20 w-40 h-28 sm:w-48 sm:h-32 rounded-xl overflow-hidden shadow-lg border-2 border-primary/30 cursor-move transition-all duration-300 ease-out",
+        cornerStyles[corner],
+        isDragging && "opacity-75 scale-105"
+      )}
+      onMouseDown={handleMouseDown}
+      onTouchStart={handleTouchStart}
+      onClick={handleClick}
+    >
+      {stream && !isVideoOff ? (
+        <video
+          ref={videoRef}
+          autoPlay
+          playsInline
+          muted
+          className="w-full h-full object-cover transform scale-x-[-1]"
+        />
+      ) : (
+        <div className="w-full h-full bg-secondary flex items-center justify-center">
+          <div className="w-12 h-12 rounded-full bg-primary/20 flex items-center justify-center">
+            <span className="text-xl font-bold text-primary">
+              {label[0]?.toUpperCase() || "?"}
+            </span>
+          </div>
+        </div>
+      )}
+      {/* Label and status indicators */}
+      <div className="absolute bottom-1 left-1 right-1 flex items-center justify-between">
+        <span className="px-1.5 py-0.5 rounded bg-black/50 text-white text-xs">
+          {label}
+        </span>
+        <div className="flex gap-1">
+          {isMuted && (
+            <span className="p-1 rounded bg-red-500/80">
+              <MicOff className="w-3 h-3 text-white" />
+            </span>
+          )}
+          {isVideoOff && (
+            <span className="p-1 rounded bg-red-500/80">
+              <VideoOff className="w-3 h-3 text-white" />
+            </span>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -278,10 +430,10 @@ export default function MeetingPage() {
           </div>
         </header>
 
-        {/* Video Grid */}
-        <div className="flex-1 p-4 overflow-auto">
+        {/* Main Video Area */}
+        <div className="flex-1 relative overflow-hidden">
           {state.error ? (
-            <div className="h-full flex items-center justify-center">
+            <div className="h-full flex items-center justify-center p-4">
               <Card className="p-6 max-w-md text-center space-y-4">
                 <p className="text-destructive">{state.error}</p>
                 <Button variant="outline" onClick={() => router.push("/")}>
@@ -289,31 +441,57 @@ export default function MeetingPage() {
                 </Button>
               </Card>
             </div>
-          ) : (
-            <div className="grid gap-4 h-full" style={{
-              gridTemplateColumns: remoteStreams.size === 0
-                ? "1fr"
-                : remoteStreams.size === 1
-                  ? "repeat(2, 1fr)"
-                  : "repeat(auto-fit, minmax(300px, 1fr))",
-            }}>
-              {/* Local video */}
-              <VideoTile
-                stream={localStream}
-                muted
-                label={user?.username || "You"}
-                isLocal
-              />
-
-              {/* Remote videos */}
-              {Array.from(remoteStreams.entries()).map(([peerId, stream]) => (
-                <VideoTile
-                  key={peerId}
-                  stream={stream}
-                  label={`Peer ${peerId.slice(0, 8)}`}
-                />
-              ))}
+          ) : remoteStreams.size === 0 ? (
+            /* No remote participants - show waiting state with local video centered */
+            <div className="h-full flex items-center justify-center p-4">
+              <div className="text-center space-y-6">
+                <div className="w-64 h-48 sm:w-80 sm:h-60 mx-auto">
+                  <VideoTile
+                    stream={localStream}
+                    muted
+                    label={user?.username || "You"}
+                    isLocal
+                    className="w-full h-full"
+                  />
+                </div>
+                <p className="text-muted-foreground text-sm">
+                  Your video preview. Waiting for others to join...
+                </p>
+              </div>
             </div>
+          ) : (
+            /* Remote participants - show them in main area with local PiP */
+            <>
+              {/* Remote video grid - takes full space */}
+              <div className="h-full p-4">
+                <div className={cn(
+                  "h-full grid gap-4",
+                  remoteStreams.size === 1 && "place-items-center",
+                  remoteStreams.size === 2 && "grid-cols-2",
+                  remoteStreams.size >= 3 && "grid-cols-2 lg:grid-cols-3"
+                )}>
+                  {Array.from(remoteStreams.entries()).map(([peerId, stream]) => (
+                    <VideoTile
+                      key={peerId}
+                      stream={stream}
+                      label={`Peer ${peerId.slice(0, 8)}`}
+                      className={cn(
+                        "w-full",
+                        remoteStreams.size === 1 ? "max-w-4xl h-full max-h-[70vh]" : "aspect-video"
+                      )}
+                    />
+                  ))}
+                </div>
+              </div>
+
+              {/* Local video PiP - draggable to corners */}
+              <LocalVideoPiP
+                stream={localStream}
+                label={user?.username || "You"}
+                isMuted={isMuted}
+                isVideoOff={isVideoOff}
+              />
+            </>
           )}
         </div>
 
