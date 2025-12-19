@@ -121,7 +121,28 @@ export function useMeeting(roomId: string) {
         break;
 
       case "userCount":
-        setState((prev) => ({ ...prev, userCount: msg.content }));
+        setState((prev) => {
+          const newCount = msg.content;
+          const wasAlone = prev.userCount <= 1;
+          const nowHasOthers = newCount > 1;
+
+          // Auto-start meeting when second user joins and we're the initiator
+          if (prev.isInitiator && wasAlone && nowHasOthers) {
+            // Delay slightly to ensure state is updated
+            setTimeout(() => {
+              if (wsRef.current?.readyState === WebSocket.OPEN) {
+                console.log("[Meeting] Auto-starting meeting as initiator");
+                wsRef.current.send(JSON.stringify({
+                  type: "startMeeting",
+                  roomId,
+                  content: {},
+                }));
+              }
+            }, 500);
+          }
+
+          return { ...prev, userCount: newCount };
+        });
         break;
 
       case "userList":

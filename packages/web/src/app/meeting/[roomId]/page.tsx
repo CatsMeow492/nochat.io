@@ -20,7 +20,6 @@ import {
   Users,
   Copy,
   Check,
-  Play,
   Link2,
 } from "lucide-react";
 import { useMeeting } from "@/hooks/use-meeting";
@@ -247,7 +246,6 @@ export default function MeetingPage() {
     isVideoOff,
     connect,
     disconnect,
-    startMeeting,
     toggleMute,
     toggleVideo,
   } = useMeeting(roomId);
@@ -298,10 +296,6 @@ export default function MeetingPage() {
   const handleLeave = () => {
     disconnect();
     router.push("/");
-  };
-
-  const handleStartMeeting = () => {
-    startMeeting();
   };
 
   // Show loading while checking auth
@@ -497,24 +491,6 @@ export default function MeetingPage() {
 
         {/* Controls */}
         <footer className="flex items-center justify-center gap-4 px-4 py-4 border-t border-border bg-card/50">
-          {/* Start Meeting (for initiator when waiting) */}
-          {state.isInitiator && state.userCount > 1 && (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="default"
-                  size="lg"
-                  onClick={handleStartMeeting}
-                  className="gap-2"
-                >
-                  <Play className="w-5 h-5" />
-                  Start Call
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>Start the video call with all participants</TooltipContent>
-            </Tooltip>
-          )}
-
           {/* Mute */}
           <Tooltip>
             <TooltipTrigger asChild>
