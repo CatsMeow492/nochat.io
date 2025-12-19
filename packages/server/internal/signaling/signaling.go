@@ -397,7 +397,18 @@ func (s *Service) broadcastToRoom(room *Room, msg models.WSMessage, exclude *Cli
 
 func (s *Service) forwardToPeer(room *Room, peerID string, msg models.WSMessage) {
 	room.mu.RLock()
+	// First try direct lookup by client ID
 	peer, exists := room.Clients[peerID]
+	// If not found, try looking up by UserID
+	if !exists {
+		for _, c := range room.Clients {
+			if c.UserID.String() == peerID {
+				peer = c
+				exists = true
+				break
+			}
+		}
+	}
 	room.mu.RUnlock()
 
 	if !exists {
