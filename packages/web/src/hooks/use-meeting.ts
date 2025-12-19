@@ -204,8 +204,15 @@ export function useMeeting(roomId: string) {
       localStreamRef.current = stream;
       setLocalStream(stream);
 
+      // Get the latest user from store (to handle race conditions after anonymous sign-in)
+      const currentUser = useAuthStore.getState().user;
+      const userId = currentUser?.id || user?.id;
+
+      if (!userId) {
+        throw new Error("User not authenticated. Please sign in first.");
+      }
+
       // Connect WebSocket
-      const userId = user?.id || "anonymous";
       const wsUrl = `${WS_URL}/api/signaling?user_id=${userId}&room_id=${roomId}`;
       const ws = new WebSocket(wsUrl);
 

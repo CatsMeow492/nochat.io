@@ -25,6 +25,8 @@ import {
 } from "lucide-react";
 import { useMeeting } from "@/hooks/use-meeting";
 import { useAuth } from "@/hooks";
+import { api } from "@/lib/api";
+import { useAuthStore } from "@/stores";
 import { cn } from "@/lib/utils";
 
 function VideoTile({
@@ -80,8 +82,10 @@ export default function MeetingPage() {
   const router = useRouter();
   const roomId = params.roomId as string;
   const { user, isLoading: isAuthLoading } = useAuth();
+  const { setUser } = useAuthStore();
   const [copied, setCopied] = useState(false);
   const [hasJoined, setHasJoined] = useState(false);
+  const [isJoining, setIsJoining] = useState(false);
 
   const {
     localStream,
@@ -108,8 +112,31 @@ export default function MeetingPage() {
   };
 
   const handleJoin = async () => {
-    await connect();
-    setHasJoined(true);
+    setIsJoining(true);
+    try {
+      // If user is not authenticated, sign in anonymously first
+      if (!user) {
+        const response = await api.signInAnonymous();
+        localStorage.setItem("token", response.token);
+        setUser(
+          {
+            id: response.user.id,
+            username: response.user.username,
+            email: response.user.email,
+            isAnonymous: response.user.is_anonymous ?? true,
+            walletAddress: response.user.wallet_address,
+            createdAt: response.user.created_at,
+          },
+          response.token
+        );
+      }
+      await connect();
+      setHasJoined(true);
+    } catch (error) {
+      console.error("Failed to join meeting:", error);
+    } finally {
+      setIsJoining(false);
+    }
   };
 
   const handleLeave = () => {
@@ -188,10 +215,11 @@ export default function MeetingPage() {
               <Button
                 size="lg"
                 onClick={handleJoin}
+                disabled={isJoining}
                 className="w-full py-6 text-lg gap-2"
               >
                 <Video className="w-5 h-5" />
-                Join Meeting
+                {isJoining ? "Joining..." : "Join Meeting"}
               </Button>
               <Button
                 variant="ghost"
