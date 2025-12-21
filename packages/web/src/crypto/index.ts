@@ -1,52 +1,37 @@
 /**
  * E2EE Crypto Module for nochat.io
  *
- * This module provides post-quantum secure end-to-end encryption
- * using ML-KEM (Kyber) for key exchange and ML-DSA (Dilithium) for signatures.
+ * This module provides end-to-end encryption using Web Crypto API:
+ * - ECDSA P-256 for digital signatures (identity keys)
+ * - ECDH P-256 for key exchange
+ * - AES-256-GCM for message encryption
+ * - HKDF for key derivation
+ *
+ * Keys are stored securely in IndexedDB using the idb library.
  *
  * Usage:
  *
- * 1. Initialize on app startup:
+ * 1. Initialize on user login:
  *    ```typescript
- *    import { cryptoService, initPQC } from './crypto';
+ *    import { cryptoService } from './crypto';
  *
- *    // Initialize PQC module
- *    await initPQC();
- *
- *    // Initialize for current user
+ *    // Initialize for current user (generates or loads keys from IndexedDB)
  *    await cryptoService.initialize(userId);
  *    ```
  *
  * 2. Upload keys to server:
  *    ```typescript
  *    const keys = await cryptoService.getKeysForUpload();
- *    // POST to /api/crypto/keys/identity, /api/crypto/keys/prekey, /api/crypto/keys/prekeys
+ *    // POST to /api/crypto/keys/identity, /api/crypto/keys/prekey
  *    ```
  *
- * 3. Establish session with peer:
- *    ```typescript
- *    // Fetch peer's prekey bundle from server
- *    const bundle = await fetch(`/api/crypto/bundles/${peerId}`).then(r => r.json());
- *    await cryptoService.establishSession(bundle);
- *    ```
- *
- * 4. Encrypt/decrypt messages:
+ * 3. Encrypt/decrypt messages:
  *    ```typescript
  *    // Encrypt
- *    const payload = await cryptoService.encryptMessage(peerId, 'Hello!');
- *    websocket.send({ type: 'encryptedMessage', content: payload });
+ *    const encrypted = await cryptoService.encryptMessage(conversationId, 'Hello!');
  *
  *    // Decrypt
- *    const plaintext = await cryptoService.decryptMessage(senderId, payload);
- *    ```
- *
- * 5. Handle files:
- *    ```typescript
- *    // Encrypt file before upload
- *    const { encryptedFile, fileInfo } = await cryptoService.encryptFileForUpload(file, messageKey);
- *
- *    // Decrypt file after download
- *    const decryptedFile = await cryptoService.decryptDownloadedFile(encryptedFile, fileInfo, messageKey);
+ *    const plaintext = await cryptoService.decryptMessage(conversationId, encrypted);
  *    ```
  */
 
@@ -72,9 +57,13 @@ export {
   KYBER1024_PUBLIC_KEY_SIZE,
   KYBER1024_PRIVATE_KEY_SIZE,
   KYBER1024_CIPHERTEXT_SIZE,
-  DILITHIUM3_PUBLIC_KEY_SIZE,
-  DILITHIUM3_PRIVATE_KEY_SIZE,
-  DILITHIUM3_SIGNATURE_SIZE,
+  KYBER1024_SHARED_SECRET_SIZE,
+  X25519_PUBLIC_KEY_SIZE,
+  X25519_PRIVATE_KEY_SIZE,
+  X25519_SHARED_SECRET_SIZE,
+  ED25519_PUBLIC_KEY_SIZE,
+  ED25519_PRIVATE_KEY_SIZE,
+  ED25519_SIGNATURE_SIZE,
 } from './pqc';
 
 // X3DH key exchange
@@ -121,3 +110,53 @@ export {
   isWebCryptoAvailable,
   createStorageKey,
 } from './utils';
+
+// Sealed Sender (metadata protection)
+export {
+  generateSealedSenderKeyPair,
+  sealedSenderEncrypt,
+  sealedSenderDecrypt,
+  computeDeliveryToken,
+  hashDeliveryToken,
+  getTimestampBucket,
+  padToBlockSize,
+  unpadFromBlockSize,
+  createSealedMessage,
+  createSealedGroupMessage,
+  decryptSealedGroupMessage,
+  serializeSealedEnvelope,
+  deserializeSealedEnvelope,
+  SEALED_SENDER_VERSION,
+  PADDING_BLOCK_SIZES,
+  TIMESTAMP_BUCKET_MS,
+} from './sealed-sender';
+
+// Re-export sealed sender types
+export type {
+  InnerEnvelope,
+  SealedEnvelope,
+  SealedSenderKeyPair,
+  WSSealedMessage,
+  WSSealedGroupMessage,
+  WSSealedKey,
+} from './sealed-sender';
+
+// Key Transparency (Auditable Key Directory)
+export {
+  KeyTransparencyService,
+  keyTransparencyService,
+  TransparencyError,
+} from './transparency';
+
+// Re-export transparency types
+export type {
+  LeafData,
+  SignedTreeHead,
+  InclusionProof,
+  ConsistencyProof,
+  SigningKey,
+  VerificationResult,
+} from './transparency';
+
+// Re-export transparency warning type from CryptoService
+export type { TransparencyWarning } from './CryptoService';

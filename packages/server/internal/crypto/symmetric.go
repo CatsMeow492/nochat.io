@@ -1,3 +1,29 @@
+/*
+Package crypto provides symmetric encryption primitives.
+
+ALGORITHMS SUPPORTED:
+  - AES-256-GCM: NIST-approved authenticated encryption
+  - XChaCha20-Poly1305: Extended-nonce ChaCha20 with Poly1305 MAC
+
+SECURITY PROPERTIES:
+Both algorithms provide AEAD (Authenticated Encryption with Associated Data):
+  - Confidentiality: 256-bit key provides strong encryption
+  - Integrity: Authentication tag detects any tampering
+  - Authenticity: Decryption fails if ciphertext modified
+
+NONCE HANDLING:
+  - AES-GCM: 12-byte (96-bit) nonce, randomly generated
+  - XChaCha20-Poly1305: 24-byte nonce, randomly generated
+
+KEY DERIVATION:
+HKDF-SHA256 is used to derive encryption keys from shared secrets.
+This ensures domain separation and key independence.
+
+NOTE: This package is used for server-side operations like sealed sender
+envelope encryption. Message encryption happens client-side.
+
+See /docs/crypto-inventory.md for full cryptographic details.
+*/
 package crypto
 
 import (
@@ -190,4 +216,62 @@ func DeriveKey(masterKey, salt, info []byte, keyLen int) ([]byte, error) {
 	}
 
 	return derivedKey, nil
+}
+
+// ============================================================================
+// Simple AES-GCM helpers (for sealed sender)
+// ============================================================================
+
+// AESGCMEncrypt encrypts plaintext with a provided nonce (no additional data)
+// Used by sealed sender encryption where nonce is pre-generated
+func AESGCMEncrypt(key, nonce, plaintext []byte) ([]byte, error) {
+	if len(key) != SymmetricKeySize {
+		return nil, fmt.Errorf("invalid key size: expected %d, got %d", SymmetricKeySize, len(key))
+	}
+
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create AES cipher: %w", err)
+	}
+
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create GCM: %w", err)
+	}
+
+	if len(nonce) != gcm.NonceSize() {
+		return nil, fmt.Errorf("invalid nonce size: expected %d, got %d", gcm.NonceSize(), len(nonce))
+	}
+
+	ciphertext := gcm.Seal(nil, nonce, plaintext, nil)
+	return ciphertext, nil
+}
+
+// AESGCMDecrypt decrypts ciphertext with a provided nonce (no additional data)
+// Used by sealed sender decryption
+func AESGCMDecrypt(key, nonce, ciphertext []byte) ([]byte, error) {
+	if len(key) != SymmetricKeySize {
+		return nil, fmt.Errorf("invalid key size: expected %d, got %d", SymmetricKeySize, len(key))
+	}
+
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create AES cipher: %w", err)
+	}
+
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create GCM: %w", err)
+	}
+
+	if len(nonce) != gcm.NonceSize() {
+		return nil, fmt.Errorf("invalid nonce size: expected %d, got %d", gcm.NonceSize(), len(nonce))
+	}
+
+	plaintext, err := gcm.Open(nil, nonce, ciphertext, nil)
+	if err != nil {
+		return nil, fmt.Errorf("decryption failed: %w", err)
+	}
+
+	return plaintext, nil
 }

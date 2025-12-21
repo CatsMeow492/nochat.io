@@ -273,12 +273,19 @@ func (s *Service) handleAnswer(client *Client, msg models.WSMessage) {
 
 	content["fromPeerId"] = client.UserID.String()
 
+	// Set signaling state for the answerer so their ICE candidates can be forwarded
+	// This enables bidirectional ICE candidate exchange
+	s.storeSignalingState(client.Room, targetPeerID, client.UserID.String(), "answer", content)
+
 	// Forward answer to target peer
 	s.forwardToPeer(client.Room, targetPeerID, models.WSMessage{
 		Type:    "answer",
 		RoomID:  client.Room.ID,
 		Content: content,
 	})
+
+	// Send any queued ICE candidates from the answerer to the offerer
+	s.sendQueuedCandidates(client.Room, targetPeerID, client.UserID.String())
 }
 
 func (s *Service) handleICECandidate(client *Client, msg models.WSMessage) {

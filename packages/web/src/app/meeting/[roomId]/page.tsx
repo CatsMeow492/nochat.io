@@ -52,12 +52,40 @@ function VideoTile({
   className?: string;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const streamIdRef = useRef<string | null>(null);
 
   useEffect(() => {
-    if (videoRef.current && stream) {
-      videoRef.current.srcObject = stream;
+    const video = videoRef.current;
+    if (!video || !stream) return;
+
+    // Only update if stream actually changed (compare by stream.id)
+    if (streamIdRef.current === stream.id) {
+      return;
     }
-  }, [stream]);
+    streamIdRef.current = stream.id;
+
+    console.log(`[VideoTile] Setting srcObject for ${label}, stream id: ${stream.id}, tracks:`, stream.getTracks().map(t => t.kind));
+    video.srcObject = stream;
+
+    // Use onloadedmetadata to ensure video is ready before playing
+    const handleLoadedMetadata = () => {
+      console.log(`[VideoTile] Metadata loaded for ${label}, attempting play`);
+      video.play().catch(err => {
+        console.warn(`[VideoTile] Play failed for ${label}:`, err);
+      });
+    };
+
+    video.addEventListener('loadedmetadata', handleLoadedMetadata);
+
+    // Also try to play immediately in case metadata is already loaded
+    if (video.readyState >= 1) {
+      video.play().catch(() => {});
+    }
+
+    return () => {
+      video.removeEventListener('loadedmetadata', handleLoadedMetadata);
+    };
+  }, [stream, label]);
 
   return (
     <div className={cn("relative bg-secondary/50 rounded-xl overflow-hidden", className)}>

@@ -131,15 +131,32 @@ class ApiClient {
     );
   }
 
+  async getParticipants(conversationId: string) {
+    return this.request<{
+      participants: Array<{
+        id: string;
+        conversation_id: string;
+        user_id: string;
+        role: string;
+        joined_at: string;
+        last_read_at: string;
+        is_muted: boolean;
+      }>;
+    }>(`/api/conversations/${conversationId}/participants`);
+  }
+
   async sendMessage(conversationId: string, data: { content: string; encrypted?: boolean }) {
     // Transform frontend format to backend expected format
+    // Note: message_type is the content type (text, image, etc.)
+    // encryption_version indicates if the content is encrypted (1 = encrypted, 0 = plaintext)
     return this.request<{ message: any }>(
       `/api/conversations/${conversationId}/messages`,
       {
         method: "POST",
         body: JSON.stringify({
           encrypted_content: data.content,
-          message_type: data.encrypted ? "encrypted" : "text",
+          message_type: "text",
+          encryption_version: data.encrypted ? 1 : 0,
         }),
       }
     );
@@ -176,7 +193,7 @@ class ApiClient {
   async getPreKeyBundle(userId: string) {
     return this.request<{
       user_id: string;
-      identity_key: { public_key: string; fingerprint: string };
+      identity_key: { dilithium_public_key: string; key_fingerprint: string };
       signed_prekey: {
         key_id: number;
         kyber_public_key: string;
@@ -185,6 +202,77 @@ class ApiClient {
       one_time_prekey?: { key_id: number; kyber_public_key: string };
       bundle_version: number;
     }>(`/api/crypto/bundles/${userId}`);
+  }
+
+  // Sealed sender endpoints
+  async uploadSealedSenderKey(publicKey: string) {
+    return this.request<{
+      id: string;
+      user_id: string;
+      key_fingerprint: string;
+      key_version: number;
+      status: string;
+      created_at: string;
+      expires_at?: string;
+    }>("/api/crypto/keys/sealed-sender", {
+      method: "POST",
+      body: JSON.stringify({ public_key: publicKey }),
+    });
+  }
+
+  async getMySealedSenderKey() {
+    return this.request<{
+      id: string;
+      user_id: string;
+      key_fingerprint: string;
+      key_version: number;
+      status: string;
+      created_at: string;
+      expires_at?: string;
+    }>("/api/crypto/keys/sealed-sender");
+  }
+
+  async getSealedSenderStatus() {
+    return this.request<{
+      enabled: boolean;
+      has_key: boolean;
+      key_fingerprint?: string;
+      key_version?: number;
+      has_delivery_verifier: boolean;
+    }>("/api/crypto/keys/sealed-sender/status");
+  }
+
+  async setSealedSenderEnabled(enabled: boolean) {
+    return this.request<{ enabled: boolean }>("/api/crypto/settings/sealed-sender", {
+      method: "POST",
+      body: JSON.stringify({ enabled }),
+    });
+  }
+
+  async getPreKeyBundleWithSealedSender(userId: string) {
+    return this.request<{
+      user_id: string;
+      identity_key: { dilithium_public_key: string; key_fingerprint: string };
+      signed_prekey: {
+        key_id: number;
+        ec_public_key: string;
+        kyber_public_key: string;
+        signature: string;
+      };
+      one_time_prekey?: {
+        key_id: number;
+        ec_public_key: string;
+        kyber_public_key: string;
+      };
+      bundle_version: number;
+      sealed_sender?: {
+        kyber_public_key: string;
+        key_fingerprint: string;
+        key_version: number;
+        delivery_token: string;
+        enabled: boolean;
+      };
+    }>(`/api/crypto/bundles/${userId}/sealed`);
   }
 
   async getPreKeyCount() {
@@ -216,6 +304,102 @@ class ApiClient {
       method: "POST",
       body: JSON.stringify({ storage_key: storageKey }),
     });
+  }
+
+  // Key Transparency endpoints
+  async getTransparencyRoot() {
+    return this.request<{
+      epoch_number: number;
+      root_hash: string;
+      tree_size: number;
+      signature: string;
+      signing_key_fingerprint: string;
+      timestamp: string;
+    }>("/api/transparency/root");
+  }
+
+  async getInclusionProof(userId: string, epoch?: number) {
+    const params = new URLSearchParams({ user_id: userId });
+    if (epoch !== undefined) {
+      params.set("epoch", epoch.toString());
+    }
+    return this.request<{
+      epoch_number: number;
+      leaf_hash: string;
+      leaf_data: {
+        user_id: string;
+        identity_key_fingerprint: string;
+        signed_prekey_fingerprint?: string;
+        key_version: number;
+        timestamp: number;
+      };
+      sibling_path: string[];
+      path_bits: string;
+      root_hash: string;
+    }>(`/api/transparency/inclusion?${params.toString()}`);
+  }
+
+  async getConsistencyProof(fromEpoch: number, toEpoch: number) {
+    const params = new URLSearchParams({
+      from: fromEpoch.toString(),
+      to: toEpoch.toString(),
+    });
+    return this.request<{
+      from_epoch: number;
+      to_epoch: number;
+      from_root: string;
+      to_root: string;
+      proof_hashes: string[];
+    }>(`/api/transparency/consistency?${params.toString()}`);
+  }
+
+  async getTransparencyAuditLog(params?: { limit?: number; from_epoch?: number }) {
+    const queryParams = new URLSearchParams();
+    if (params?.limit) queryParams.set("limit", params.limit.toString());
+    if (params?.from_epoch) queryParams.set("from_epoch", params.from_epoch.toString());
+    const query = queryParams.toString();
+    return this.request<{
+      entries: Array<{
+        epoch_number: number;
+        change_type: string;
+        user_id_commitment: string;
+        old_leaf_hash?: string;
+        new_leaf_hash?: string;
+        timestamp: string;
+      }>;
+    }>(`/api/transparency/audit-log${query ? `?${query}` : ""}`);
+  }
+
+  async getTransparencySigningKeys() {
+    return this.request<{
+      keys: Array<{
+        fingerprint: string;
+        public_key: string;
+        algorithm: string;
+        valid_from: string;
+        valid_until?: string;
+      }>;
+    }>("/api/transparency/signing-keys");
+  }
+
+  async updateClientTransparencyState(data: {
+    device_id: string;
+    last_verified_epoch: number;
+    last_verified_root: string;
+  }) {
+    return this.request<{ success: boolean }>("/api/transparency/client-state", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async getClientTransparencyState(deviceId: string) {
+    return this.request<{
+      device_id: string;
+      last_verified_epoch: number;
+      last_verified_root: string;
+      updated_at: string;
+    }>(`/api/transparency/client-state?device_id=${encodeURIComponent(deviceId)}`);
   }
 }
 

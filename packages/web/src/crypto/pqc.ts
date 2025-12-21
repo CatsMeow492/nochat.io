@@ -1,180 +1,246 @@
 /**
- * Post-Quantum Cryptography (PQC) module for nochat.io
+ * Post-Quantum Cryptography module for nochat.io
  *
- * This module provides Kyber (ML-KEM) and Dilithium (ML-DSA) cryptographic operations.
+ * IMPLEMENTATION STATUS: PREPARED (Not Active in Main Encryption Path)
  *
- * In production, this should be backed by a WASM module compiled from:
- * - cloudflare/circl (Go) or
- * - pqcrypto (Rust) or
- * - liboqs (C)
+ * This module provides post-quantum cryptographic primitives using:
+ * - ML-KEM (Kyber-1024) for key encapsulation via @noble/post-quantum
+ * - X25519 for classical ECDH via @noble/curves
+ * - Ed25519 for digital signatures via @noble/curves (Dilithium placeholder)
  *
- * For now, this provides the interface and stub implementations.
- * The actual WASM integration should be done in pqc-wasm.ts
+ * IMPORTANT: These primitives are AVAILABLE but NOT USED by CryptoService.
+ * The main encryption path (CryptoService.ts) currently uses:
+ * - P-256 ECDH for key exchange (Web Crypto API)
+ * - P-256 ECDSA for signatures (Web Crypto API)
+ *
+ * This module exists to:
+ * 1. Prepare for post-quantum migration
+ * 2. Enable hybrid PQXDH when activated
+ * 3. Provide quantum resistance when wired to CryptoService
+ *
+ * KEY SIZES:
+ * - Kyber-1024 Public Key: 1568 bytes
+ * - Kyber-1024 Private Key: 3168 bytes
+ * - Kyber-1024 Ciphertext: 1568 bytes
+ * - Kyber-1024 Shared Secret: 32 bytes
+ * - X25519/Ed25519 keys: 32 bytes each
+ *
+ * @see /docs/crypto-inventory.md for full cryptographic details
  */
 
-import { KyberKeyPair, DilithiumKeyPair, KyberEncapsulation } from './types';
+import { ml_kem1024 } from '@noble/post-quantum/ml-kem.js';
+import { x25519, ed25519 } from '@noble/curves/ed25519.js';
+import { KyberKeyPair, DilithiumKeyPair, KyberEncapsulation, ECKeyPair, HybridKeyPair } from './types';
 import { randomBytes, toBase64, fromBase64 } from './utils';
 
-// Key sizes for validation
+// Key sizes for real PQC algorithms
 export const KYBER1024_PUBLIC_KEY_SIZE = 1568;
 export const KYBER1024_PRIVATE_KEY_SIZE = 3168;
 export const KYBER1024_CIPHERTEXT_SIZE = 1568;
 export const KYBER1024_SHARED_SECRET_SIZE = 32;
 
-export const DILITHIUM3_PUBLIC_KEY_SIZE = 1952;
-export const DILITHIUM3_PRIVATE_KEY_SIZE = 4016;
-export const DILITHIUM3_SIGNATURE_SIZE = 3293;
+// X25519 sizes
+export const X25519_PUBLIC_KEY_SIZE = 32;
+export const X25519_PRIVATE_KEY_SIZE = 32;
+export const X25519_SHARED_SECRET_SIZE = 32;
 
-// WASM module state
-let wasmModule: any = null;
-let wasmReady = false;
+// Ed25519 sizes (for signing - placeholder until Dilithium WASM is ready)
+export const ED25519_PUBLIC_KEY_SIZE = 32;
+export const ED25519_PRIVATE_KEY_SIZE = 32;
+export const ED25519_SIGNATURE_SIZE = 64;
+
+// Legacy P-256 sizes (for backwards compatibility detection)
+export const P256_PUBLIC_KEY_SIZE = 65;
+
+// Module state
+let cryptoReady = false;
 
 /**
- * Initialize the PQC WASM module
- * This should be called once at app startup
+ * Initialize the crypto module
  */
 export async function initPQC(): Promise<void> {
-  if (wasmReady) return;
+  if (cryptoReady) return;
 
   try {
-    // Try to load the WASM module
-    // In production, this would be: const module = await import('./pqc-wasm');
-    // For now, we'll use a fallback/stub
+    console.log('[Crypto] Initializing post-quantum cryptography module...');
 
-    console.log('[PQC] Initializing PQC cryptography...');
+    // Test ML-KEM (Kyber) is working
+    const testKeys = ml_kem1024.keygen();
+    if (!testKeys.publicKey || testKeys.publicKey.length !== KYBER1024_PUBLIC_KEY_SIZE) {
+      throw new Error('ML-KEM initialization failed');
+    }
 
-    // Check if WASM module is available
-    // wasmModule = await loadWasmModule();
-    // wasmReady = true;
+    // Test X25519 is working
+    const testX25519 = x25519.utils.randomSecretKey();
+    const testX25519Pub = x25519.getPublicKey(testX25519);
+    if (testX25519Pub.length !== X25519_PUBLIC_KEY_SIZE) {
+      throw new Error('X25519 initialization failed');
+    }
 
-    // For development, mark as ready with stub implementations
-    wasmReady = true;
-    console.log('[PQC] PQC module initialized (using development stubs)');
-    console.warn('[PQC] WARNING: Using stub implementations! Not secure for production.');
+    cryptoReady = true;
+    console.log('[Crypto] Post-quantum cryptography module initialized (ML-KEM + X25519)');
   } catch (error) {
-    console.error('[PQC] Failed to initialize PQC module:', error);
-    throw new Error('Failed to initialize PQC cryptography');
+    console.error('[Crypto] Failed to initialize crypto module:', error);
+    throw new Error('Failed to initialize post-quantum cryptography');
   }
 }
 
 /**
- * Check if PQC is ready
+ * Check if crypto is ready
  */
 export function isPQCReady(): boolean {
-  return wasmReady;
+  return cryptoReady;
 }
 
 /**
- * Generate a Kyber1024 key pair for key encapsulation
+ * Generate a Kyber-1024 key pair for post-quantum key encapsulation
  */
 export async function generateKyberKeyPair(): Promise<KyberKeyPair> {
   ensureReady();
 
-  if (wasmModule) {
-    // Use WASM implementation
-    return wasmModule.kyberGenerateKeyPair();
-  }
+  const keys = ml_kem1024.keygen();
 
-  // Stub implementation for development
-  // WARNING: This is NOT cryptographically secure!
-  console.warn('[PQC] Using stub Kyber key generation');
   return {
-    publicKey: randomBytes(KYBER1024_PUBLIC_KEY_SIZE),
-    privateKey: randomBytes(KYBER1024_PRIVATE_KEY_SIZE),
+    publicKey: keys.publicKey,
+    privateKey: keys.secretKey,
   };
 }
 
 /**
- * Generate a Dilithium3 key pair for digital signatures
+ * Generate an X25519 key pair for classical ECDH
+ */
+export async function generateX25519KeyPair(): Promise<ECKeyPair> {
+  ensureReady();
+
+  const privateKey = x25519.utils.randomSecretKey();
+  const publicKey = x25519.getPublicKey(privateKey);
+
+  return {
+    publicKey,
+    privateKey,
+  };
+}
+
+/**
+ * Generate a hybrid key pair (X25519 + Kyber-1024) for PQXDH
+ */
+export async function generateHybridKeyPair(): Promise<HybridKeyPair> {
+  ensureReady();
+
+  const ecKeyPair = await generateX25519KeyPair();
+  const pqKeyPair = await generateKyberKeyPair();
+
+  return {
+    ecPublicKey: ecKeyPair.publicKey,
+    ecPrivateKey: ecKeyPair.privateKey,
+    pqPublicKey: pqKeyPair.publicKey,
+    pqPrivateKey: pqKeyPair.privateKey,
+  };
+}
+
+/**
+ * Generate an Ed25519 key pair for digital signatures
+ * Note: Ed25519 is a placeholder until Dilithium3 WASM is available.
+ * For full post-quantum security, we should use Dilithium3.
  */
 export async function generateDilithiumKeyPair(): Promise<DilithiumKeyPair> {
   ensureReady();
 
-  if (wasmModule) {
-    // Use WASM implementation
-    return wasmModule.dilithiumGenerateKeyPair();
-  }
+  const privateKey = ed25519.utils.randomSecretKey();
+  const publicKey = ed25519.getPublicKey(privateKey);
 
-  // Stub implementation for development
-  console.warn('[PQC] Using stub Dilithium key generation');
   return {
-    publicKey: randomBytes(DILITHIUM3_PUBLIC_KEY_SIZE),
-    privateKey: randomBytes(DILITHIUM3_PRIVATE_KEY_SIZE),
+    publicKey,
+    privateKey,
   };
 }
 
 /**
- * Encapsulate a shared secret using a Kyber public key
- * @param publicKey Recipient's Kyber public key
- * @returns Ciphertext (send to recipient) and shared secret (use locally)
+ * Encapsulate a shared secret using Kyber-1024
+ * This generates a ciphertext and shared secret from a public key.
+ * Only the holder of the corresponding private key can derive the shared secret.
  */
 export async function kyberEncapsulate(publicKey: Uint8Array): Promise<KyberEncapsulation> {
   ensureReady();
-  validateKeySize(publicKey, KYBER1024_PUBLIC_KEY_SIZE, 'Kyber public key');
 
-  if (wasmModule) {
-    return wasmModule.kyberEncapsulate(publicKey);
+  if (publicKey.length !== KYBER1024_PUBLIC_KEY_SIZE) {
+    throw new Error(`Invalid Kyber public key size: expected ${KYBER1024_PUBLIC_KEY_SIZE}, got ${publicKey.length}`);
   }
 
-  // Stub implementation
-  console.warn('[PQC] Using stub Kyber encapsulation');
+  const { cipherText, sharedSecret } = ml_kem1024.encapsulate(publicKey);
+
   return {
-    ciphertext: randomBytes(KYBER1024_CIPHERTEXT_SIZE),
-    sharedSecret: randomBytes(KYBER1024_SHARED_SECRET_SIZE),
+    ciphertext: cipherText,
+    sharedSecret,
   };
 }
 
 /**
- * Decapsulate a shared secret using a Kyber private key
- * @param privateKey Our Kyber private key
- * @param ciphertext Received ciphertext from encapsulation
- * @returns The shared secret
+ * Decapsulate a shared secret using Kyber-1024
+ * Derives the same shared secret from a ciphertext using the private key.
  */
 export async function kyberDecapsulate(
   privateKey: Uint8Array,
   ciphertext: Uint8Array
 ): Promise<Uint8Array> {
   ensureReady();
-  validateKeySize(privateKey, KYBER1024_PRIVATE_KEY_SIZE, 'Kyber private key');
-  validateKeySize(ciphertext, KYBER1024_CIPHERTEXT_SIZE, 'Kyber ciphertext');
 
-  if (wasmModule) {
-    return wasmModule.kyberDecapsulate(privateKey, ciphertext);
+  if (privateKey.length !== KYBER1024_PRIVATE_KEY_SIZE) {
+    throw new Error(`Invalid Kyber private key size: expected ${KYBER1024_PRIVATE_KEY_SIZE}, got ${privateKey.length}`);
+  }
+  if (ciphertext.length !== KYBER1024_CIPHERTEXT_SIZE) {
+    throw new Error(`Invalid Kyber ciphertext size: expected ${KYBER1024_CIPHERTEXT_SIZE}, got ${ciphertext.length}`);
   }
 
-  // Stub implementation
-  console.warn('[PQC] Using stub Kyber decapsulation');
-  return randomBytes(KYBER1024_SHARED_SECRET_SIZE);
+  const sharedSecret = ml_kem1024.decapsulate(ciphertext, privateKey);
+
+  return sharedSecret;
 }
 
 /**
- * Sign a message using Dilithium3
- * @param privateKey Signer's Dilithium private key
- * @param message Message to sign
- * @returns Signature
+ * Perform X25519 Diffie-Hellman key exchange
+ * Returns the shared secret from the private key and peer's public key.
+ */
+export async function x25519DH(
+  privateKey: Uint8Array,
+  peerPublicKey: Uint8Array
+): Promise<Uint8Array> {
+  ensureReady();
+
+  if (privateKey.length !== X25519_PRIVATE_KEY_SIZE) {
+    throw new Error(`Invalid X25519 private key size: expected ${X25519_PRIVATE_KEY_SIZE}, got ${privateKey.length}`);
+  }
+  if (peerPublicKey.length !== X25519_PUBLIC_KEY_SIZE) {
+    throw new Error(`Invalid X25519 public key size: expected ${X25519_PUBLIC_KEY_SIZE}, got ${peerPublicKey.length}`);
+  }
+
+  const sharedSecret = x25519.getSharedSecret(privateKey, peerPublicKey);
+
+  return sharedSecret;
+}
+
+/**
+ * Sign a message using Ed25519
+ * Note: This is a placeholder until Dilithium3 WASM is available.
  */
 export async function dilithiumSign(
   privateKey: Uint8Array,
   message: Uint8Array
 ): Promise<Uint8Array> {
   ensureReady();
-  validateKeySize(privateKey, DILITHIUM3_PRIVATE_KEY_SIZE, 'Dilithium private key');
 
-  if (wasmModule) {
-    return wasmModule.dilithiumSign(privateKey, message);
+  if (privateKey.length !== ED25519_PRIVATE_KEY_SIZE) {
+    throw new Error(`Invalid signing key size: expected ${ED25519_PRIVATE_KEY_SIZE}, got ${privateKey.length}`);
   }
 
-  // Stub implementation
-  console.warn('[PQC] Using stub Dilithium signing');
-  return randomBytes(DILITHIUM3_SIGNATURE_SIZE);
+  const signature = ed25519.sign(message, privateKey);
+
+  return signature;
 }
 
 /**
- * Verify a Dilithium3 signature
- * @param publicKey Signer's Dilithium public key
- * @param message Original message
- * @param signature Signature to verify
- * @returns true if valid, false otherwise
+ * Verify a signature using Ed25519
+ * Note: This is a placeholder until Dilithium3 WASM is available.
  */
 export async function dilithiumVerify(
   publicKey: Uint8Array,
@@ -182,20 +248,23 @@ export async function dilithiumVerify(
   signature: Uint8Array
 ): Promise<boolean> {
   ensureReady();
-  validateKeySize(publicKey, DILITHIUM3_PUBLIC_KEY_SIZE, 'Dilithium public key');
-  validateKeySize(signature, DILITHIUM3_SIGNATURE_SIZE, 'Dilithium signature');
 
-  if (wasmModule) {
-    return wasmModule.dilithiumVerify(publicKey, message, signature);
+  if (publicKey.length !== ED25519_PUBLIC_KEY_SIZE) {
+    throw new Error(`Invalid verification key size: expected ${ED25519_PUBLIC_KEY_SIZE}, got ${publicKey.length}`);
+  }
+  if (signature.length !== ED25519_SIGNATURE_SIZE) {
+    throw new Error(`Invalid signature size: expected ${ED25519_SIGNATURE_SIZE}, got ${signature.length}`);
   }
 
-  // Stub implementation - always returns true (NOT SECURE!)
-  console.warn('[PQC] Using stub Dilithium verification');
-  return true;
+  try {
+    return ed25519.verify(signature, message, publicKey);
+  } catch {
+    return false;
+  }
 }
 
 /**
- * Create a signed prekey (Kyber key signed with Dilithium)
+ * Create a signed prekey (Kyber key signed with Ed25519)
  */
 export async function createSignedPreKey(
   identityPrivateKey: Uint8Array,
@@ -216,6 +285,33 @@ export async function createSignedPreKey(
 }
 
 /**
+ * Create a hybrid signed prekey (X25519 + Kyber signed with Ed25519)
+ */
+export async function createHybridSignedPreKey(
+  identityPrivateKey: Uint8Array,
+  keyId: number
+): Promise<{
+  hybridKeyPair: HybridKeyPair;
+  signature: Uint8Array;
+  keyId: number;
+}> {
+  const hybridKeyPair = await generateHybridKeyPair();
+
+  // Sign the concatenation of EC and PQ public keys
+  const combinedPublicKey = new Uint8Array(hybridKeyPair.ecPublicKey.length + hybridKeyPair.pqPublicKey.length);
+  combinedPublicKey.set(hybridKeyPair.ecPublicKey, 0);
+  combinedPublicKey.set(hybridKeyPair.pqPublicKey, hybridKeyPair.ecPublicKey.length);
+
+  const signature = await dilithiumSign(identityPrivateKey, combinedPublicKey);
+
+  return {
+    hybridKeyPair,
+    signature,
+    keyId,
+  };
+}
+
+/**
  * Verify a signed prekey
  */
 export async function verifySignedPreKey(
@@ -224,6 +320,23 @@ export async function verifySignedPreKey(
   signature: Uint8Array
 ): Promise<boolean> {
   return dilithiumVerify(identityPublicKey, preKeyPublicKey, signature);
+}
+
+/**
+ * Verify a hybrid signed prekey
+ */
+export async function verifyHybridSignedPreKey(
+  identityPublicKey: Uint8Array,
+  ecPublicKey: Uint8Array,
+  pqPublicKey: Uint8Array,
+  signature: Uint8Array
+): Promise<boolean> {
+  // Reconstruct the combined public key that was signed
+  const combinedPublicKey = new Uint8Array(ecPublicKey.length + pqPublicKey.length);
+  combinedPublicKey.set(ecPublicKey, 0);
+  combinedPublicKey.set(pqPublicKey, ecPublicKey.length);
+
+  return dilithiumVerify(identityPublicKey, combinedPublicKey, signature);
 }
 
 /**
@@ -243,24 +356,56 @@ export async function generateOneTimePreKeys(
   return preKeys;
 }
 
+/**
+ * Generate a batch of hybrid one-time prekeys
+ */
+export async function generateHybridOneTimePreKeys(
+  startId: number,
+  count: number
+): Promise<Map<number, HybridKeyPair>> {
+  const preKeys = new Map<number, HybridKeyPair>();
+
+  for (let i = 0; i < count; i++) {
+    const keyPair = await generateHybridKeyPair();
+    preKeys.set(startId + i, keyPair);
+  }
+
+  return preKeys;
+}
+
+/**
+ * Check if a key is a legacy P-256 key (for backwards compatibility)
+ */
+export function isLegacyP256Key(publicKey: Uint8Array): boolean {
+  return publicKey.length === P256_PUBLIC_KEY_SIZE;
+}
+
+/**
+ * Check if a key is a Kyber-1024 key
+ */
+export function isKyberKey(publicKey: Uint8Array): boolean {
+  return publicKey.length === KYBER1024_PUBLIC_KEY_SIZE;
+}
+
+/**
+ * Check if a key is an X25519 key
+ */
+export function isX25519Key(publicKey: Uint8Array): boolean {
+  return publicKey.length === X25519_PUBLIC_KEY_SIZE;
+}
+
 // Helper functions
 
 function ensureReady(): void {
-  if (!wasmReady) {
-    throw new Error('PQC module not initialized. Call initPQC() first.');
-  }
-}
-
-function validateKeySize(data: Uint8Array, expectedSize: number, name: string): void {
-  if (data.length !== expectedSize) {
-    throw new Error(`Invalid ${name} size: expected ${expectedSize}, got ${data.length}`);
+  if (!cryptoReady) {
+    throw new Error('Crypto module not initialized. Call initPQC() first.');
   }
 }
 
 /**
  * Serialize a key pair for storage
  */
-export function serializeKeyPair<T extends KyberKeyPair | DilithiumKeyPair>(
+export function serializeKeyPair<T extends KyberKeyPair | DilithiumKeyPair | ECKeyPair>(
   keyPair: T
 ): { publicKey: string; privateKey: string } {
   return {
@@ -270,23 +415,42 @@ export function serializeKeyPair<T extends KyberKeyPair | DilithiumKeyPair>(
 }
 
 /**
+ * Serialize a hybrid key pair for storage
+ */
+export function serializeHybridKeyPair(
+  keyPair: HybridKeyPair
+): { ecPublicKey: string; ecPrivateKey: string; pqPublicKey: string; pqPrivateKey: string } {
+  return {
+    ecPublicKey: toBase64(keyPair.ecPublicKey),
+    ecPrivateKey: toBase64(keyPair.ecPrivateKey),
+    pqPublicKey: toBase64(keyPair.pqPublicKey),
+    pqPrivateKey: toBase64(keyPair.pqPrivateKey),
+  };
+}
+
+/**
  * Deserialize a key pair from storage
  */
 export function deserializeKeyPair(
   serialized: { publicKey: string; privateKey: string },
-  type: 'kyber' | 'dilithium'
-): KyberKeyPair | DilithiumKeyPair {
-  const publicKey = fromBase64(serialized.publicKey);
-  const privateKey = fromBase64(serialized.privateKey);
+  type: 'kyber' | 'dilithium' | 'x25519'
+): KyberKeyPair | DilithiumKeyPair | ECKeyPair {
+  return {
+    publicKey: fromBase64(serialized.publicKey),
+    privateKey: fromBase64(serialized.privateKey),
+  };
+}
 
-  // Validate sizes
-  if (type === 'kyber') {
-    validateKeySize(publicKey, KYBER1024_PUBLIC_KEY_SIZE, 'Kyber public key');
-    validateKeySize(privateKey, KYBER1024_PRIVATE_KEY_SIZE, 'Kyber private key');
-  } else {
-    validateKeySize(publicKey, DILITHIUM3_PUBLIC_KEY_SIZE, 'Dilithium public key');
-    validateKeySize(privateKey, DILITHIUM3_PRIVATE_KEY_SIZE, 'Dilithium private key');
-  }
-
-  return { publicKey, privateKey };
+/**
+ * Deserialize a hybrid key pair from storage
+ */
+export function deserializeHybridKeyPair(
+  serialized: { ecPublicKey: string; ecPrivateKey: string; pqPublicKey: string; pqPrivateKey: string }
+): HybridKeyPair {
+  return {
+    ecPublicKey: fromBase64(serialized.ecPublicKey),
+    ecPrivateKey: fromBase64(serialized.ecPrivateKey),
+    pqPublicKey: fromBase64(serialized.pqPublicKey),
+    pqPrivateKey: fromBase64(serialized.pqPrivateKey),
+  };
 }

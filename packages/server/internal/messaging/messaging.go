@@ -129,6 +129,34 @@ func (s *Service) AddParticipant(ctx context.Context, conversationID, userID uui
 	return err
 }
 
+// GetParticipants returns all participants in a conversation
+func (s *Service) GetParticipants(ctx context.Context, conversationID uuid.UUID) ([]*models.Participant, error) {
+	query := `
+		SELECT id, conversation_id, user_id, role, joined_at, last_read_at, is_muted
+		FROM participants
+		WHERE conversation_id = $1
+		ORDER BY joined_at ASC
+	`
+
+	rows, err := s.db.QueryContext(ctx, query, conversationID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query participants: %w", err)
+	}
+	defer rows.Close()
+
+	var participants []*models.Participant
+	for rows.Next() {
+		var p models.Participant
+		err := rows.Scan(&p.ID, &p.ConversationID, &p.UserID, &p.Role, &p.JoinedAt, &p.LastReadAt, &p.IsMuted)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan participant: %w", err)
+		}
+		participants = append(participants, &p)
+	}
+
+	return participants, nil
+}
+
 // CreateMessage creates a new message in a conversation
 func (s *Service) CreateMessage(ctx context.Context, conversationID, senderID uuid.UUID, encryptedContent []byte, messageType string, replyToID *uuid.UUID) (*models.Message, error) {
 	msg := &models.Message{

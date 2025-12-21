@@ -1,6 +1,7 @@
 "use client";
 
-import { useRef, useEffect, useState, FormEvent } from "react";
+import { useRef, useEffect, useState, FormEvent, useCallback } from "react";
+import { useRouter } from "next/navigation";
 import {
   Send,
   Lock,
@@ -22,7 +23,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useMessages } from "@/hooks";
-import { useAuthStore, useCryptoStore, useChatStore } from "@/stores";
+import { useAuthStore, useChatStore } from "@/stores";
 import { cn } from "@/lib/utils";
 
 interface ChatViewProps {
@@ -30,15 +31,34 @@ interface ChatViewProps {
 }
 
 export function ChatView({ conversationId }: ChatViewProps) {
+  const router = useRouter();
   const { user } = useAuthStore();
-  const { status: encryptionStatus } = useCryptoStore();
   const { typingUsers, setCurrentRoom } = useChatStore();
-  const { messages, isLoading, sendMessage, isSending } =
-    useMessages(conversationId);
+  const {
+    messages,
+    isLoading,
+    sendMessage,
+    isSending,
+    isEncrypted,
+    isP2PReady,
+    sessionStatus,
+    isDM,
+  } = useMessages(conversationId);
 
   const [newMessage, setNewMessage] = useState("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  // Call handlers - navigate to meeting room using conversation ID as room ID
+  const handleVoiceCall = useCallback(() => {
+    // Use conversation ID as the meeting room ID for continuity
+    router.push(`/meeting/${conversationId}?mode=audio`);
+  }, [router, conversationId]);
+
+  const handleVideoCall = useCallback(() => {
+    // Use conversation ID as the meeting room ID for continuity
+    router.push(`/meeting/${conversationId}`);
+  }, [router, conversationId]);
 
   // Set current room for unread tracking
   useEffect(() => {
@@ -62,7 +82,7 @@ export function ChatView({ conversationId }: ChatViewProps) {
 
     sendMessage({
       content: newMessage,
-      encrypted: encryptionStatus === "encrypted",
+      encrypted: isEncrypted,
     });
     setNewMessage("");
   };
@@ -70,7 +90,24 @@ export function ChatView({ conversationId }: ChatViewProps) {
   const typing = typingUsers.get(conversationId);
   const typingArray = typing ? Array.from(typing) : [];
 
-  const isEncrypted = encryptionStatus === "encrypted";
+  // Use the isEncrypted from useMessages hook (which checks both store status and CryptoService)
+  const encryptionReady = isEncrypted;
+
+  // Determine encryption status text
+  const getEncryptionStatusText = () => {
+    if (!encryptionReady) return "Setting up encryption...";
+    if (isP2PReady) return "Zero-trust P2P encrypted";
+    if (isDM && sessionStatus === "pending") return "Establishing P2P session...";
+    if (isDM && sessionStatus === "failed") return "E2E encrypted (P2P unavailable)";
+    return "End-to-end encrypted";
+  };
+
+  const getEncryptionStatusColor = () => {
+    if (!encryptionReady) return "bg-yellow-500";
+    if (isP2PReady) return "bg-green-500";
+    if (isDM && sessionStatus === "pending") return "bg-yellow-500";
+    return "bg-green-400"; // Legacy mode still green, but lighter
+  };
 
   return (
     <div className="flex flex-col h-full">
@@ -96,10 +133,10 @@ export function ChatView({ conversationId }: ChatViewProps) {
                   <span
                     className={cn(
                       "w-2 h-2 rounded-full",
-                      isEncrypted ? "bg-green-500" : "bg-yellow-500"
+                      getEncryptionStatusColor()
                     )}
                   />
-                  {isEncrypted ? "End-to-end encrypted" : "Setting up encryption..."}
+                  {getEncryptionStatusText()}
                 </>
               )}
             </div>
@@ -109,7 +146,7 @@ export function ChatView({ conversationId }: ChatViewProps) {
         <div className="flex items-center gap-1">
           <Tooltip>
             <TooltipTrigger asChild>
-              <Button variant="ghost" size="icon">
+              <Button variant="ghost" size="icon" onClick={handleVoiceCall}>
                 <Phone className="w-5 h-5" />
               </Button>
             </TooltipTrigger>
@@ -117,7 +154,7 @@ export function ChatView({ conversationId }: ChatViewProps) {
           </Tooltip>
           <Tooltip>
             <TooltipTrigger asChild>
-              <Button variant="ghost" size="icon">
+              <Button variant="ghost" size="icon" onClick={handleVideoCall}>
                 <Video className="w-5 h-5" />
               </Button>
             </TooltipTrigger>
@@ -245,30 +282,32 @@ export function ChatView({ conversationId }: ChatViewProps) {
               value={newMessage}
               onChange={(e) => setNewMessage(e.target.value)}
               placeholder={
-                isEncrypted
+                encryptionReady
                   ? "Type an encrypted message..."
                   : "Waiting for encryption..."
               }
-              disabled={!isEncrypted}
+              disabled={!encryptionReady}
               className="pr-12 bg-secondary/50 border-border focus-visible:ring-primary"
             />
-            {isEncrypted && (
+            {encryptionReady && (
               <Lock className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-green-500" />
             )}
           </div>
           <Button
             type="submit"
-            disabled={!newMessage.trim() || isSending || !isEncrypted}
+            disabled={!newMessage.trim() || isSending || !encryptionReady}
             className="px-4"
           >
             <Send className="w-5 h-5" />
           </Button>
         </form>
         <p className="text-xs text-muted-foreground mt-2 text-center">
-          {isEncrypted ? (
+          {encryptionReady ? (
             <span className="flex items-center justify-center gap-1">
-              <Lock className="w-3 h-3" />
-              Messages are end-to-end encrypted
+              <Lock className={cn("w-3 h-3", isP2PReady ? "text-green-500" : "text-green-400")} />
+              {isP2PReady
+                ? "Messages are zero-trust P2P encrypted"
+                : "Messages are end-to-end encrypted"}
             </span>
           ) : (
             "Establishing secure connection..."

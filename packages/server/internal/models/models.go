@@ -250,3 +250,119 @@ type UserDevice struct {
 	CreatedAt       time.Time  `json:"created_at"`
 	RevokedAt       *time.Time `json:"revoked_at,omitempty"`
 }
+
+// ============================================================================
+// Sealed Sender Types
+// ============================================================================
+//
+// Sealed sender hides the message sender's identity from the server.
+// The server can only route messages based on recipient_id.
+// The sender's identity is encrypted inside the sealed envelope.
+
+// SealedMessage represents a sealed sender message for 1:1 direct messages
+// Server only sees: recipient_id, timestamp_bucket, delivery_token_hash
+// Server CANNOT see: sender_id (encrypted inside sealed_content)
+type SealedMessage struct {
+	ID                uuid.UUID `json:"id"`
+	RecipientID       uuid.UUID `json:"recipient_id"`       // Server knows destination
+	SealedContent     []byte    `json:"sealed_content"`     // Encrypted envelope (opaque to server)
+	DeliveryTokenHash string    `json:"delivery_token_hash"` // SHA-256 of delivery token
+	TimestampBucket   time.Time `json:"timestamp_bucket"`   // 15-minute bucket (privacy)
+	CreatedAt         time.Time `json:"created_at"`
+	// Note: sender_id is NULL in database - sender identity is inside sealed_content
+}
+
+// SealedGroupMessage represents a sealed sender message for group chats
+// Uses fanout optimization: one encrypted_envelope, per-recipient sealed keys
+type SealedGroupMessage struct {
+	ID                uuid.UUID          `json:"id"`
+	ConversationID    uuid.UUID          `json:"conversation_id"`    // Server knows the group
+	EncryptedEnvelope []byte             `json:"encrypted_envelope"` // Shared encrypted inner envelope
+	SealedKeys        []SealedMessageKey `json:"sealed_keys"`        // Per-recipient sealed content keys
+	TimestampBucket   time.Time          `json:"timestamp_bucket"`
+	CreatedAt         time.Time          `json:"created_at"`
+}
+
+// SealedMessageKey represents a per-recipient sealed content key for group fanout
+type SealedMessageKey struct {
+	ID                 uuid.UUID `json:"id"`
+	MessageID          uuid.UUID `json:"message_id"`
+	RecipientID        uuid.UUID `json:"recipient_id"`
+	SealedContentKey   []byte    `json:"sealed_content_key"`   // Content key KEM-encrypted to recipient
+	EphemeralPublicKey []byte    `json:"ephemeral_public_key"` // Kyber ephemeral key for decapsulation
+	KEMCiphertext      []byte    `json:"kem_ciphertext"`       // Kyber KEM ciphertext
+	DeliveryTokenHash  string    `json:"delivery_token_hash"`
+	TokenValid         *bool     `json:"token_valid,omitempty"` // Recipient validation status
+	CreatedAt          time.Time `json:"created_at"`
+}
+
+// SealedSenderAttempt tracks sealed sender delivery attempts for rate limiting
+type SealedSenderAttempt struct {
+	ID          uuid.UUID  `json:"id"`
+	RecipientID uuid.UUID  `json:"recipient_id"`
+	TokenHash   string     `json:"token_hash"`
+	Valid       *bool      `json:"valid,omitempty"` // null=pending, true=valid, false=invalid
+	IPAddress   *string    `json:"ip_address,omitempty"`
+	CreatedAt   time.Time  `json:"created_at"`
+}
+
+// InnerEnvelope represents the decrypted content of a sealed envelope
+// Only the recipient can decrypt this - server never sees it
+type InnerEnvelope struct {
+	SenderID             string `json:"sender_id"`
+	SenderIdentityKey    string `json:"sender_identity_key"`    // Base64 encoded
+	SenderKeyFingerprint string `json:"sender_key_fingerprint"`
+	MessageContent       []byte `json:"message_content"`        // Double Ratchet encrypted payload
+	TrueTimestamp        int64  `json:"true_timestamp"`         // Actual message time (hidden from server)
+	ConversationID       string `json:"conversation_id,omitempty"` // For group messages, verify correct group
+	MessageID            string `json:"message_id,omitempty"`   // For deduplication in groups
+}
+
+// WSSealedMessage represents a sealed message over WebSocket
+type WSSealedMessage struct {
+	Type              string `json:"type"`               // "sealedMessage"
+	RecipientID       string `json:"recipient_id"`
+	SealedContent     string `json:"sealed_content"`     // Base64 encoded
+	DeliveryToken     string `json:"delivery_token"`     // Base64 encoded (server hashes it)
+	TimestampBucket   int64  `json:"timestamp_bucket"`   // Unix timestamp (15-min bucket)
+}
+
+// WSSealedGroupMessage represents a sealed group message over WebSocket
+type WSSealedGroupMessage struct {
+	Type              string              `json:"type"`               // "sealedGroupMessage"
+	ConversationID    string              `json:"conversation_id"`
+	EncryptedEnvelope string              `json:"encrypted_envelope"` // Base64 encoded
+	SealedKeys        []WSSealedKey       `json:"sealed_keys"`        // Per-recipient
+	TimestampBucket   int64               `json:"timestamp_bucket"`
+}
+
+// WSSealedKey represents a per-recipient sealed key in a WebSocket message
+type WSSealedKey struct {
+	RecipientID        string `json:"recipient_id"`
+	SealedContentKey   string `json:"sealed_content_key"`   // Base64 encoded
+	EphemeralPublicKey string `json:"ephemeral_public_key"` // Base64 encoded
+	KEMCiphertext      string `json:"kem_ciphertext"`       // Base64 encoded
+	DeliveryToken      string `json:"delivery_token"`       // Base64 encoded
+}
+
+// SealedSenderKeyUpload represents a request to upload a sealed sender public key
+type SealedSenderKeyUpload struct {
+	KyberPublicKey string `json:"kyber_public_key"` // Base64 encoded (1568 bytes)
+}
+
+// SealedSenderKeyResponse represents the response for sealed sender key operations
+type SealedSenderKeyResponse struct {
+	KeyFingerprint string    `json:"key_fingerprint"`
+	KeyVersion     int       `json:"key_version"`
+	CreatedAt      time.Time `json:"created_at"`
+	ExpiresAt      time.Time `json:"expires_at"`
+}
+
+// SealedSenderStatusResponse represents the sealed sender status for a user
+type SealedSenderStatusResponse struct {
+	Enabled          bool   `json:"enabled"`
+	HasSealedKey     bool   `json:"has_sealed_key"`
+	HasDeliveryToken bool   `json:"has_delivery_token"`
+	KeyFingerprint   string `json:"key_fingerprint,omitempty"`
+	KeyVersion       int    `json:"key_version,omitempty"`
+}

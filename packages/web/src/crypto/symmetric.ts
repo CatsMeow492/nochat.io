@@ -1,4 +1,32 @@
-// Symmetric encryption using Web Crypto API
+/**
+ * Symmetric Encryption Module for nochat.io
+ *
+ * SECURITY OVERVIEW:
+ * Implements authenticated encryption using Web Crypto API.
+ * All functions use AEAD (Authenticated Encryption with Associated Data).
+ *
+ * ALGORITHM: AES-256-GCM
+ * - Key size: 256 bits (32 bytes)
+ * - Nonce size: 96 bits (12 bytes) - randomly generated per message
+ * - Auth tag: 128 bits (16 bytes) - appended to ciphertext
+ *
+ * NONCE HANDLING:
+ * - Each encryption generates a fresh 12-byte random nonce
+ * - Nonces MUST be unique per key - we ensure this via CSPRNG
+ * - Nonce is prepended to ciphertext for transport
+ *
+ * SECURITY PROPERTIES:
+ * - Confidentiality: AES-256 provides 256-bit security
+ * - Integrity: GCM auth tag detects tampering
+ * - Authenticity: Decryption fails if ciphertext modified
+ *
+ * XChaCha20-Poly1305 NOTE:
+ * Mentioned for potential future use but currently falls back to AES-GCM
+ * as libsodium WASM is not loaded.
+ *
+ * @see /docs/crypto-inventory.md for full cryptographic details
+ */
+
 // Supports AES-256-GCM and XChaCha20-Poly1305 (via libsodium)
 
 import { EncryptedMessage } from './types';
@@ -31,7 +59,18 @@ export function generateNonce(): Uint8Array {
 }
 
 /**
- * Encrypt data using AES-256-GCM
+ * Encrypt data using AES-256-GCM.
+ *
+ * SECURITY NOTES:
+ * - Generates a fresh 12-byte random nonce for each encryption
+ * - Uses Web Crypto API (browser's native implementation)
+ * - Auth tag (16 bytes) is appended to ciphertext by Web Crypto
+ * - Caller MUST use a unique key per session or use nonce in transport
+ *
+ * @param key - 256-bit (32 bytes) symmetric key
+ * @param plaintext - Data to encrypt
+ * @param additionalData - Optional AAD (authenticated but not encrypted)
+ * @returns EncryptedMessage containing ciphertext + nonce
  */
 export async function encryptAESGCM(
   key: Uint8Array,
@@ -53,14 +92,19 @@ export async function encryptAESGCM(
     ['encrypt']
   );
 
+  // Build encryption params - only include additionalData if provided
+  const encryptParams: AesGcmParams = {
+    name: 'AES-GCM',
+    iv: toArrayBuffer(nonce),
+    tagLength: AES_GCM_TAG_SIZE * 8,
+  };
+  if (additionalData) {
+    encryptParams.additionalData = toArrayBuffer(additionalData);
+  }
+
   // Encrypt
   const ciphertext = await crypto.subtle.encrypt(
-    {
-      name: 'AES-GCM',
-      iv: toArrayBuffer(nonce),
-      additionalData: additionalData ? toArrayBuffer(additionalData) : undefined,
-      tagLength: AES_GCM_TAG_SIZE * 8,
-    },
+    encryptParams,
     cryptoKey,
     toArrayBuffer(plaintext)
   );
@@ -97,14 +141,19 @@ export async function decryptAESGCM(
     ['decrypt']
   );
 
+  // Build decryption params - only include additionalData if provided
+  const decryptParams: AesGcmParams = {
+    name: 'AES-GCM',
+    iv: toArrayBuffer(nonce),
+    tagLength: AES_GCM_TAG_SIZE * 8,
+  };
+  if (additionalData) {
+    decryptParams.additionalData = toArrayBuffer(additionalData);
+  }
+
   // Decrypt
   const plaintext = await crypto.subtle.decrypt(
-    {
-      name: 'AES-GCM',
-      iv: toArrayBuffer(nonce),
-      additionalData: additionalData ? toArrayBuffer(additionalData) : undefined,
-      tagLength: AES_GCM_TAG_SIZE * 8,
-    },
+    decryptParams,
     cryptoKey,
     toArrayBuffer(ciphertext)
   );

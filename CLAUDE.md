@@ -367,27 +367,50 @@ Benefits:
 - Easier local development
 - Clear domain boundaries still maintained
 
-## Zero-Trust Security Layer (PQC & E2EE)
+## Zero-Trust Security Layer (E2EE)
 
-nochat.io implements a **zero-trust architecture** where the server never sees user content. All messages, files, and metadata are end-to-end encrypted using post-quantum cryptography.
+nochat.io implements a **zero-trust architecture** where the server never sees user content. All messages and files are end-to-end encrypted client-side before transmission.
 
-### Cryptographic Primitives
+> **Note:** For detailed cryptographic implementation audit, see [docs/crypto-inventory.md](./docs/crypto-inventory.md)
 
-**Post-Quantum Algorithms (via cloudflare/circl):**
-- **ML-KEM (Kyber1024)**: Key encapsulation for key exchange
-- **ML-DSA (Dilithium3)**: Digital signatures for identity and prekey signing
+### Implementation Status
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| E2EE Messaging | **Deployed** | P-256 ECDH + AES-256-GCM |
+| Post-Quantum Crypto | **Planned** | Backend ready, frontend uses classical |
+| Sealed Sender | **Planned** | Code prepared, not integrated |
+| Double Ratchet | **Planned** | Types defined, not active |
+
+### Cryptographic Primitives (Currently Deployed)
+
+**Asymmetric Algorithms (via Web Crypto API):**
+- **P-256 ECDSA**: Digital signatures for identity verification
+- **P-256 ECDH**: Key exchange for session key derivation
 
 **Symmetric Encryption:**
-- **AES-256-GCM** or **XChaCha20-Poly1305** for message/file encryption
-- **HKDF-SHA256** for key derivation
+- **AES-256-GCM**: Message and file encryption
+- **HKDF-SHA256**: Key derivation from shared secrets
 
-### Key Types
+**Planned Post-Quantum Algorithms:**
+- **ML-KEM (Kyber-1024)**: Key encapsulation (backend supports, frontend prepared)
+- **ML-DSA (Dilithium3)**: Digital signatures (backend implemented, frontend uses Ed25519 placeholder)
+
+### Key Types (Current)
+
+| Key Type | Algorithm | Purpose | Lifespan |
+|----------|-----------|---------|----------|
+| Identity Key | P-256 ECDSA | Long-term identity, signs prekeys | Permanent (rotatable) |
+| Exchange Key | P-256 ECDH | Key exchange for session derivation | Permanent (rotatable) |
+| Session Key | AES-256 | Per-peer message encryption | Per session |
+
+### Key Types (Planned - PQC)
 
 | Key Type | Algorithm | Purpose | Lifespan |
 |----------|-----------|---------|----------|
 | Identity Key | Dilithium3 | Long-term identity, signs prekeys | Permanent (rotatable) |
-| Signed PreKey | Kyber1024 | Medium-term key exchange | ~7 days |
-| One-Time PreKey | Kyber1024 | Single-use forward secrecy | One message |
+| Signed PreKey | Hybrid X25519+Kyber | Medium-term key exchange | ~7 days |
+| One-Time PreKey | Hybrid X25519+Kyber | Single-use forward secrecy | One message |
 | Session Key | AES-256 | Per-message encryption | Per ratchet step |
 
 ### Backend Crypto Domain (`internal/crypto/`)
@@ -424,40 +447,51 @@ src/crypto/
 └── CryptoService.ts  # Main service (key management, sessions)
 ```
 
-### E2EE Protocol Flow
+### E2EE Protocol Flow (Current)
 
-**Initial Key Exchange (X3DH-style with Kyber):**
-1. Alice fetches Bob's prekey bundle from server
-2. Alice verifies Bob's signed prekey signature
-3. Alice generates ephemeral Kyber key pair
-4. Alice encapsulates with Bob's signed prekey + one-time prekey
-5. Alice derives shared secret via HKDF
-6. Alice sends encrypted initial message + ephemeral public key
-7. Bob decapsulates and derives the same shared secret
-8. Both initialize Double Ratchet with shared root key
+**Session Establishment (P-256 ECDH):**
+1. Alice fetches Bob's prekey bundle from server (P-256 public key)
+2. Alice performs ECDH: `sharedSecret = ECDH(Alice.privateKey, Bob.publicKey)`
+3. Both parties derive session key: `sessionKey = HKDF(sharedSecret, salt, info, 32)`
+4. Salt includes sorted user IDs for deterministic derivation
+5. Session key cached in IndexedDB for future messages
 
-**Double Ratchet Message Encryption:**
+**Message Encryption (Current):**
+1. Retrieve cached session key for peer
+2. Generate random 12-byte nonce
+3. Encrypt: `ciphertext = AES-256-GCM(sessionKey, nonce, plaintext)`
+4. Pack: `message = Base64(nonce || ciphertext || authTag)`
+5. Send via WebSocket or REST API
+
+**Planned: Double Ratchet Protocol (Not Yet Active):**
 1. Derive message key from sending chain key
 2. Encrypt message with AES-256-GCM
-3. Sign ciphertext with Dilithium identity key
+3. Sign ciphertext with identity key
 4. Update chain key (ratchet step)
-5. On new ephemeral key received, perform DH ratchet
+5. On new ephemeral key received, perform DH/KEM ratchet
 
 ### WebSocket E2EE Messages
 
 ```javascript
-// Key Exchange
+// Current: Simple encrypted message (no ratcheting)
+{ type: "encryptedMessage", content: {
+    target_peer_id: "uuid" | null, // null = broadcast
+    ciphertext: "base64",          // AES-256-GCM encrypted
+    // Note: nonce is prepended to ciphertext in Base64
+}}
+
+// Planned: Key Exchange (for Double Ratchet)
 { type: "keyExchange", content: {
     exchange_type: "initiate" | "response" | "ratchet",
     target_peer_id: "uuid",
     ephemeral_public_key: "base64",
-    ciphertext: "base64", // Kyber KEM result
-    signature: "base64"   // Dilithium signature
+    ciphertext: "base64", // KEM result (Kyber)
+    signature: "base64"   // Identity signature
 }}
 
-// Encrypted Message
+// Planned: Ratcheted message format
 { type: "encryptedMessage", content: {
-    target_peer_id: "uuid" | null, // null = broadcast
+    target_peer_id: "uuid" | null,
     ciphertext: "base64",
     nonce: "base64",
     ephemeral_key: "base64",
@@ -495,11 +529,17 @@ e2ee_sessions (owner_user_id, peer_user_id, encrypted_session_state)
 
 ### Zero-Trust Guarantees
 
-1. **Server sees only opaque blobs**: Message content, file content, and metadata are encrypted client-side
-2. **Forward secrecy**: Compromised keys cannot decrypt past messages
-3. **Post-quantum resistance**: ML-KEM/ML-DSA protect against quantum attacks
-4. **Identity verification**: Dilithium signatures verify sender identity
-5. **Message integrity**: AEAD encryption detects tampering
+**Current Implementation:**
+1. **Server sees only opaque blobs**: Message content and file content are encrypted client-side
+2. **Per-session forward secrecy**: Each peer pair has a unique session key
+3. **Message integrity**: AES-256-GCM (AEAD) detects tampering
+4. **Key derivation isolation**: HKDF ensures session keys are unique per peer pair
+
+**Planned Enhancements:**
+5. **Per-message forward secrecy**: Double Ratchet with ephemeral keys (not yet active)
+6. **Post-quantum resistance**: ML-KEM/ML-DSA (backend ready, frontend prepared)
+7. **Identity verification**: Digital signatures on messages (planned)
+8. **Metadata protection**: Sealed sender (code exists, not integrated)
 
 ### E2EEChatBox Component
 

@@ -31,6 +31,8 @@ export function useMeeting(roomId: string) {
   const localStreamRef = useRef<MediaStream | null>(null);
   const myPeerIdRef = useRef<string | null>(null);
   const pendingCandidatesRef = useRef<Map<string, RTCIceCandidateInit[]>>(new Map());
+  // Use a ref to track remote streams to avoid React batching issues with rapid ontrack events
+  const remoteStreamsRef = useRef<Map<string, MediaStream>>(new Map());
 
   // Get ICE servers from backend
   const getIceServers = useCallback(async (): Promise<RTCIceServer[]> => {
@@ -53,8 +55,10 @@ export function useMeeting(roomId: string) {
       return existing;
     }
 
-    console.log(`[Meeting] Creating peer connection to ${peerId.slice(0, 8)}`);
     const iceServers = await getIceServers();
+    console.log(`[Meeting] Creating peer connection to ${peerId.slice(0, 8)}`, {
+      iceServers: iceServers.map(s => typeof s.urls === 'string' ? s.urls : s.urls?.[0]),
+    });
     const pc = new RTCPeerConnection({ iceServers });
 
     // Add local tracks
@@ -67,7 +71,16 @@ export function useMeeting(roomId: string) {
     // Handle ICE candidates
     pc.onicecandidate = (event) => {
       if (event.candidate && wsRef.current?.readyState === WebSocket.OPEN) {
-        console.log(`[Meeting] Sending ICE candidate to ${peerId.slice(0, 8)}`);
+        // Parse candidate for debugging
+        const candidateStr = event.candidate.candidate;
+        const parts = candidateStr.split(' ');
+        const candidateInfo = {
+          type: parts[7], // host, srflx, prflx, relay
+          protocol: parts[2], // udp, tcp
+          address: parts[4],
+          port: parts[5],
+        };
+        console.log(`[Meeting] Sending ICE candidate to ${peerId.slice(0, 8)}:`, candidateInfo);
         wsRef.current.send(JSON.stringify({
           type: "iceCandidate",
           roomId,
@@ -76,20 +89,46 @@ export function useMeeting(roomId: string) {
             candidate: event.candidate.toJSON(),
           },
         }));
+      } else if (!event.candidate) {
+        console.log(`[Meeting] ICE gathering complete for ${peerId.slice(0, 8)}`);
       }
+    };
+
+    // Handle ICE gathering state
+    pc.onicegatheringstatechange = () => {
+      console.log(`[Meeting] ICE gathering state for ${peerId.slice(0, 8)}:`, pc.iceGatheringState);
     };
 
     // Handle remote tracks
     pc.ontrack = (event) => {
-      console.log(`[Meeting] Received track from ${peerId.slice(0, 8)}`);
-      const [remoteStream] = event.streams;
-      if (remoteStream) {
-        setRemoteStreams((prev) => {
-          const updated = new Map(prev);
-          updated.set(peerId, remoteStream);
-          return updated;
-        });
+      console.log(`[Meeting] Received track from ${peerId.slice(0, 8)}`, {
+        streamCount: event.streams.length,
+        trackKind: event.track.kind,
+        trackId: event.track.id,
+      });
+
+      // Use ref to avoid React batching issues - multiple ontrack events fire rapidly
+      let stream = remoteStreamsRef.current.get(peerId);
+
+      if (!stream) {
+        // Prefer the stream from the event (WebRTC provides it), or create new
+        stream = event.streams[0] || new MediaStream();
+        remoteStreamsRef.current.set(peerId, stream);
+        console.log(`[Meeting] Created stream for ${peerId.slice(0, 8)}, stream id:`, stream.id);
       }
+
+      // Add track if not already present
+      const existingTrackIds = stream.getTracks().map(t => t.id);
+      if (!existingTrackIds.includes(event.track.id)) {
+        stream.addTrack(event.track);
+        console.log(`[Meeting] Added ${event.track.kind} track to stream for ${peerId.slice(0, 8)}`);
+      }
+
+      console.log(`[Meeting] Stream for ${peerId.slice(0, 8)} now has ${stream.getTracks().length} tracks:`,
+        stream.getTracks().map(t => t.kind));
+
+      // Update React state with new Map to trigger re-render
+      setRemoteStreams(new Map(remoteStreamsRef.current));
     };
 
     // Handle connection state changes
@@ -101,16 +140,31 @@ export function useMeeting(roomId: string) {
       if (pc.connectionState === "disconnected" || pc.connectionState === "failed" || pc.connectionState === "closed") {
         // Clean up disconnected peer
         peerConnectionsRef.current.delete(peerId);
-        setRemoteStreams((prev) => {
-          const updated = new Map(prev);
-          updated.delete(peerId);
-          return updated;
-        });
+        remoteStreamsRef.current.delete(peerId);
+        setRemoteStreams(new Map(remoteStreamsRef.current));
       }
     };
 
     pc.oniceconnectionstatechange = () => {
       console.log(`[Meeting] Peer ${peerId.slice(0, 8)} ICE state:`, pc.iceConnectionState);
+
+      // Log detailed stats when connection fails
+      if (pc.iceConnectionState === "failed" || pc.iceConnectionState === "disconnected") {
+        pc.getStats().then(stats => {
+          const candidatePairs: any[] = [];
+          stats.forEach(report => {
+            if (report.type === "candidate-pair") {
+              candidatePairs.push({
+                state: report.state,
+                nominated: report.nominated,
+                localCandidateId: report.localCandidateId,
+                remoteCandidateId: report.remoteCandidateId,
+              });
+            }
+          });
+          console.log(`[Meeting] ICE candidate pairs for ${peerId.slice(0, 8)}:`, candidatePairs);
+        });
+      }
     };
 
     peerConnectionsRef.current.set(peerId, pc);
@@ -245,6 +299,21 @@ export function useMeeting(roomId: string) {
           try {
             await pc.setRemoteDescription(new RTCSessionDescription(msg.content.sdp));
             console.log(`[Meeting] Set remote description from ${fromPeerId.slice(0, 8)}`);
+
+            // Apply any pending ICE candidates that arrived before the answer
+            const pending = pendingCandidatesRef.current.get(fromPeerId);
+            if (pending && pending.length > 0) {
+              console.log(`[Meeting] Applying ${pending.length} pending ICE candidates for ${fromPeerId.slice(0, 8)}`);
+              for (const candidate of pending) {
+                try {
+                  await pc.addIceCandidate(new RTCIceCandidate(candidate));
+                  console.log(`[Meeting] Applied pending ICE candidate for ${fromPeerId.slice(0, 8)}`);
+                } catch (err) {
+                  console.warn(`[Meeting] Failed to add pending ICE candidate:`, err);
+                }
+              }
+              pendingCandidatesRef.current.delete(fromPeerId);
+            }
           } catch (err) {
             console.error(`[Meeting] Failed to set remote description:`, err);
           }
@@ -264,12 +333,22 @@ export function useMeeting(roomId: string) {
           break;
         }
 
-        console.log(`[Meeting] Received ICE candidate from ${fromPeerId.slice(0, 8)}`);
+        // Parse candidate for debugging
+        const candidateStr = candidate.candidate || '';
+        const parts = candidateStr.split(' ');
+        const candidateInfo = {
+          type: parts[7], // host, srflx, prflx, relay
+          protocol: parts[2], // udp, tcp
+          address: parts[4],
+          port: parts[5],
+        };
+        console.log(`[Meeting] Received ICE candidate from ${fromPeerId.slice(0, 8)}:`, candidateInfo);
 
         const pc = peerConnectionsRef.current.get(fromPeerId);
         if (pc && pc.remoteDescription) {
           try {
             await pc.addIceCandidate(new RTCIceCandidate(candidate));
+            console.log(`[Meeting] Added ICE candidate from ${fromPeerId.slice(0, 8)}`);
           } catch (err) {
             console.warn(`[Meeting] Failed to add ICE candidate:`, err);
           }
@@ -353,6 +432,7 @@ export function useMeeting(roomId: string) {
     });
     peerConnectionsRef.current.clear();
     pendingCandidatesRef.current.clear();
+    remoteStreamsRef.current.clear();
 
     // Close WebSocket
     if (wsRef.current) {

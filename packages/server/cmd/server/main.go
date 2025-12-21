@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -20,8 +21,10 @@ import (
 	"gitlab.com/secp/services/backend/internal/db"
 	"gitlab.com/secp/services/backend/internal/messaging"
 	"gitlab.com/secp/services/backend/internal/models"
+	"gitlab.com/secp/services/backend/internal/ratelimit"
 	"gitlab.com/secp/services/backend/internal/signaling"
 	"gitlab.com/secp/services/backend/internal/storage"
+	"gitlab.com/secp/services/backend/internal/transparency"
 	"gitlab.com/secp/services/backend/pkg/handlers"
 )
 
@@ -36,13 +39,15 @@ var (
 )
 
 type Server struct {
-	db               *db.DB
-	authService      *auth.Service
-	signalingService *signaling.Service
-	messagingService *messaging.Service
-	storageService   *storage.Service
-	cryptoService    *crypto.Service
-	iceHandler       *handlers.IceHandler
+	db                   *db.DB
+	authService          *auth.Service
+	signalingService     *signaling.Service
+	messagingService     *messaging.Service
+	storageService       *storage.Service
+	cryptoService        *crypto.Service
+	transparencyService  *transparency.Service
+	rateLimiter          *ratelimit.Limiter
+	iceHandler           *handlers.IceHandler
 }
 
 func main() {
@@ -71,19 +76,36 @@ func main() {
 	}
 	cryptoService := crypto.NewService(database.Postgres)
 
+	// Initialize transparency service (for key transparency / auditable key directory)
+	transparencyService, err := transparency.NewService(database.Postgres, database.Redis)
+	if err != nil {
+		log.Printf("[WARN] Failed to initialize transparency service: %v (key transparency disabled)", err)
+		transparencyService = nil
+	}
+
+	// Wire up transparency service to crypto service
+	if transparencyService != nil {
+		cryptoService.SetTransparencyService(&transparencyQueuerAdapter{transparencyService})
+	}
+
+	// Initialize rate limiter
+	rateLimiter := ratelimit.NewLimiter(database.Redis)
+
 	// Initialize ICE handler (Twilio)
 	accountSid := os.Getenv("TWILIO_ACCOUNT_SID")
 	authToken := os.Getenv("TWILIO_AUTH_TOKEN")
 	iceHandler := handlers.NewIceHandler(accountSid, authToken)
 
 	server := &Server{
-		db:               database,
-		authService:      authService,
-		signalingService: signalingService,
-		messagingService: messagingService,
-		storageService:   storageService,
-		cryptoService:    cryptoService,
-		iceHandler:       iceHandler,
+		db:                   database,
+		authService:          authService,
+		signalingService:     signalingService,
+		messagingService:     messagingService,
+		storageService:       storageService,
+		cryptoService:        cryptoService,
+		transparencyService:  transparencyService,
+		rateLimiter:          rateLimiter,
+		iceHandler:           iceHandler,
 	}
 
 	// Setup router
@@ -157,6 +179,7 @@ func (s *Server) setupRouter() *mux.Router {
 	// Messaging routes (protected)
 	router.HandleFunc("/api/conversations", s.authMiddleware(s.handleCreateConversation)).Methods("POST")
 	router.HandleFunc("/api/conversations", s.authMiddleware(s.handleGetConversations)).Methods("GET")
+	router.HandleFunc("/api/conversations/{id}/participants", s.authMiddleware(s.handleGetParticipants)).Methods("GET")
 	router.HandleFunc("/api/conversations/{id}/messages", s.authMiddleware(s.handleGetMessages)).Methods("GET")
 	router.HandleFunc("/api/conversations/{id}/messages", s.authMiddleware(s.handleSendMessage)).Methods("POST")
 
@@ -177,6 +200,24 @@ func (s *Server) setupRouter() *mux.Router {
 	router.HandleFunc("/api/crypto/keys/prekeys/count", s.authMiddleware(s.handleGetPreKeyCount)).Methods("GET")
 	router.HandleFunc("/api/crypto/bundles/{user_id}", s.authMiddleware(s.handleGetPreKeyBundle)).Methods("GET")
 	router.HandleFunc("/api/crypto/keys/status", s.authMiddleware(s.handleGetKeyStatus)).Methods("GET")
+
+	// Sealed Sender routes (protected)
+	router.HandleFunc("/api/crypto/keys/sealed-sender", s.authMiddleware(s.handleUploadSealedSenderKey)).Methods("POST")
+	router.HandleFunc("/api/crypto/keys/sealed-sender", s.authMiddleware(s.handleGetMySealedSenderKey)).Methods("GET")
+	router.HandleFunc("/api/crypto/keys/sealed-sender/status", s.authMiddleware(s.handleGetSealedSenderStatus)).Methods("GET")
+	router.HandleFunc("/api/crypto/settings/sealed-sender", s.authMiddleware(s.handleSetSealedSenderEnabled)).Methods("POST")
+	router.HandleFunc("/api/crypto/bundles/{user_id}/sealed", s.authMiddleware(s.handleGetPreKeyBundleWithSealedSender)).Methods("GET")
+
+	// Key Transparency routes (public - for auditors)
+	router.HandleFunc("/api/transparency/root", s.handleGetTransparencyRoot).Methods("GET")
+	router.HandleFunc("/api/transparency/consistency", s.handleGetConsistencyProof).Methods("GET")
+	router.HandleFunc("/api/transparency/audit-log", s.handleGetAuditLog).Methods("GET")
+	router.HandleFunc("/api/transparency/signing-keys", s.handleGetSigningKeys).Methods("GET")
+
+	// Key Transparency routes (protected)
+	router.HandleFunc("/api/transparency/inclusion", s.authMiddleware(s.handleGetInclusionProof)).Methods("GET")
+	router.HandleFunc("/api/transparency/client-state", s.authMiddleware(s.handleUpdateClientState)).Methods("POST")
+	router.HandleFunc("/api/transparency/client-state", s.authMiddleware(s.handleGetClientState)).Methods("GET")
 
 	return router
 }
@@ -472,6 +513,25 @@ func (s *Server) handleGetConversations(w http.ResponseWriter, r *http.Request) 
 	})
 }
 
+func (s *Server) handleGetParticipants(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	convID, err := uuid.Parse(vars["id"])
+	if err != nil {
+		http.Error(w, "Invalid conversation ID", http.StatusBadRequest)
+		return
+	}
+
+	participants, err := s.messagingService.GetParticipants(r.Context(), convID)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to get participants: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"participants": participants,
+	})
+}
+
 func (s *Server) handleGetMessages(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	convID, err := uuid.Parse(vars["id"])
@@ -593,12 +653,13 @@ func (s *Server) handleAddContact(w http.ResponseWriter, r *http.Request) {
 
 // Crypto Handlers - PQC Key Management for E2EE
 
-// handleUploadIdentityKey uploads a user's Dilithium identity public key
+// handleUploadIdentityKey uploads a user's identity public key
+// Accepts both P-256 (Web Crypto API) and Dilithium3 (PQC) keys
 func (s *Server) handleUploadIdentityKey(w http.ResponseWriter, r *http.Request) {
 	userID := r.Context().Value("userID").(uuid.UUID)
 
 	var req struct {
-		PublicKey string `json:"public_key"` // Base64 encoded Dilithium3 public key
+		PublicKey string `json:"public_key"` // Base64 encoded public key (P-256 or Dilithium3)
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -613,9 +674,10 @@ func (s *Server) handleUploadIdentityKey(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Validate key size
-	if len(publicKey) != crypto.Dilithium3PublicKeySize {
-		http.Error(w, fmt.Sprintf("Invalid public key size: expected %d, got %d", crypto.Dilithium3PublicKeySize, len(publicKey)), http.StatusBadRequest)
+	// Validate key size - accept both P-256 and Dilithium3
+	if !crypto.IsValidIdentityKeySize(publicKey) {
+		http.Error(w, fmt.Sprintf("Invalid public key size: got %d bytes, expected %d (P-256) or %d (Dilithium3)",
+			len(publicKey), crypto.P256PublicKeySize, crypto.Dilithium3PublicKeySize), http.StatusBadRequest)
 		return
 	}
 
@@ -658,14 +720,15 @@ func (s *Server) handleGetMyIdentityKey(w http.ResponseWriter, r *http.Request) 
 	})
 }
 
-// handleUploadSignedPreKey uploads a user's signed Kyber prekey
+// handleUploadSignedPreKey uploads a user's signed prekey
+// Accepts both P-256 (Web Crypto API) and Kyber1024 (PQC) keys
 func (s *Server) handleUploadSignedPreKey(w http.ResponseWriter, r *http.Request) {
 	userID := r.Context().Value("userID").(uuid.UUID)
 
 	var req struct {
 		KeyID          int    `json:"key_id"`
-		KyberPublicKey string `json:"kyber_public_key"` // Base64 encoded
-		Signature      string `json:"signature"`        // Base64 encoded Dilithium signature
+		KyberPublicKey string `json:"kyber_public_key"` // Base64 encoded (P-256 or Kyber)
+		Signature      string `json:"signature"`        // Base64 encoded signature
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -673,15 +736,28 @@ func (s *Server) handleUploadSignedPreKey(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	kyberPublicKey, err := base64Decode(req.KyberPublicKey)
+	preKeyPublicKey, err := base64Decode(req.KyberPublicKey)
 	if err != nil {
-		http.Error(w, "Invalid base64 encoding for Kyber public key", http.StatusBadRequest)
+		http.Error(w, "Invalid base64 encoding for public key", http.StatusBadRequest)
 		return
 	}
 
 	signature, err := base64Decode(req.Signature)
 	if err != nil {
 		http.Error(w, "Invalid base64 encoding for signature", http.StatusBadRequest)
+		return
+	}
+
+	// Validate prekey size - accept both P-256 and Kyber1024
+	if !crypto.IsValidPreKeySize(preKeyPublicKey) {
+		http.Error(w, fmt.Sprintf("Invalid public key size: got %d bytes, expected %d (P-256) or %d (Kyber1024)",
+			len(preKeyPublicKey), crypto.P256PublicKeySize, crypto.Kyber1024PublicKeySize), http.StatusBadRequest)
+		return
+	}
+
+	// Validate signature size
+	if !crypto.IsValidSignatureSize(signature) {
+		http.Error(w, fmt.Sprintf("Invalid signature size: got %d bytes", len(signature)), http.StatusBadRequest)
 		return
 	}
 
@@ -692,14 +768,15 @@ func (s *Server) handleUploadSignedPreKey(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	valid, err := crypto.Verify(identityKey.PublicKey, kyberPublicKey, signature)
+	// Use the appropriate verification based on key type
+	valid, err := crypto.VerifyAnySignature(identityKey.PublicKey, preKeyPublicKey, signature)
 	if err != nil || !valid {
 		http.Error(w, "Invalid signature - prekey must be signed by identity key", http.StatusBadRequest)
 		return
 	}
 
 	// Store the signed prekey
-	prekey, err := s.cryptoService.StoreSignedPreKey(r.Context(), userID, req.KeyID, kyberPublicKey, signature)
+	prekey, err := s.cryptoService.StoreSignedPreKey(r.Context(), userID, req.KeyID, preKeyPublicKey, signature)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to store signed prekey: %v", err), http.StatusInternalServerError)
 		return
@@ -715,13 +792,14 @@ func (s *Server) handleUploadSignedPreKey(w http.ResponseWriter, r *http.Request
 }
 
 // handleUploadOneTimePreKeys uploads a batch of one-time prekeys
+// Accepts both P-256 (Web Crypto API) and Kyber1024 (PQC) keys
 func (s *Server) handleUploadOneTimePreKeys(w http.ResponseWriter, r *http.Request) {
 	userID := r.Context().Value("userID").(uuid.UUID)
 
 	var req struct {
 		PreKeys []struct {
 			KeyID          int    `json:"key_id"`
-			KyberPublicKey string `json:"kyber_public_key"` // Base64 encoded
+			KyberPublicKey string `json:"kyber_public_key"` // Base64 encoded (P-256 or Kyber)
 		} `json:"prekeys"`
 	}
 
@@ -743,20 +821,21 @@ func (s *Server) handleUploadOneTimePreKeys(w http.ResponseWriter, r *http.Reque
 	// Convert to internal format
 	prekeys := make([]crypto.OneTimePreKeyInput, len(req.PreKeys))
 	for i, pk := range req.PreKeys {
-		kyberPublicKey, err := base64Decode(pk.KyberPublicKey)
+		publicKey, err := base64Decode(pk.KyberPublicKey)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("Invalid base64 encoding for prekey %d", pk.KeyID), http.StatusBadRequest)
 			return
 		}
 
-		if len(kyberPublicKey) != crypto.Kyber1024PublicKeySize {
-			http.Error(w, fmt.Sprintf("Invalid Kyber public key size for prekey %d", pk.KeyID), http.StatusBadRequest)
+		// Accept both P-256 and Kyber1024 keys
+		if !crypto.IsValidPreKeySize(publicKey) {
+			http.Error(w, fmt.Sprintf("Invalid public key size for prekey %d: got %d bytes", pk.KeyID, len(publicKey)), http.StatusBadRequest)
 			return
 		}
 
 		prekeys[i] = crypto.OneTimePreKeyInput{
 			KeyID:          pk.KeyID,
-			KyberPublicKey: kyberPublicKey,
+			KyberPublicKey: publicKey,
 		}
 	}
 
@@ -794,6 +873,21 @@ func (s *Server) handleGetPreKeyBundle(w http.ResponseWriter, r *http.Request) {
 	targetUserID, err := uuid.Parse(vars["user_id"])
 	if err != nil {
 		http.Error(w, "Invalid user ID", http.StatusBadRequest)
+		return
+	}
+
+	// Rate limit check to prevent prekey exhaustion attacks
+	// Each bundle fetch claims a one-time prekey, so we must limit this
+	clientIP := r.Header.Get("X-Forwarded-For")
+	if clientIP == "" {
+		clientIP = r.RemoteAddr
+	}
+	if err := s.rateLimiter.CheckBundleFetch(r.Context(), requestingUserID.String(), targetUserID.String(), clientIP); err != nil {
+		if err == ratelimit.ErrTargetedAttack {
+			http.Error(w, "Too many requests for this user's keys", http.StatusTooManyRequests)
+		} else {
+			http.Error(w, "Rate limit exceeded", http.StatusTooManyRequests)
+		}
 		return
 	}
 
@@ -876,4 +970,517 @@ func base64Encode(data []byte) string {
 
 func base64Decode(s string) ([]byte, error) {
 	return base64.StdEncoding.DecodeString(s)
+}
+
+// ============================================================================
+// Sealed Sender Handlers
+// ============================================================================
+
+// handleUploadSealedSenderKey stores a user's sealed sender public key
+func (s *Server) handleUploadSealedSenderKey(w http.ResponseWriter, r *http.Request) {
+	userID := r.Context().Value("userID").(uuid.UUID)
+
+	var req models.SealedSenderKeyUpload
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	// Decode base64 public key
+	publicKey, err := base64Decode(req.KyberPublicKey)
+	if err != nil {
+		http.Error(w, "Invalid base64 encoding for public key", http.StatusBadRequest)
+		return
+	}
+
+	// Validate Kyber1024 key size
+	if len(publicKey) != crypto.Kyber1024PublicKeySize {
+		http.Error(w, fmt.Sprintf("Invalid public key size: got %d bytes, expected %d (Kyber1024)",
+			len(publicKey), crypto.Kyber1024PublicKeySize), http.StatusBadRequest)
+		return
+	}
+
+	// Store the sealed sender key
+	key, err := s.cryptoService.StoreSealedSenderKey(r.Context(), userID, publicKey)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to store sealed sender key: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	response := models.SealedSenderKeyResponse{
+		KeyFingerprint: key.KeyFingerprint,
+		KeyVersion:     key.KeyVersion,
+		CreatedAt:      key.CreatedAt,
+		ExpiresAt:      *key.ExpiresAt,
+	}
+
+	json.NewEncoder(w).Encode(response)
+}
+
+// handleGetMySealedSenderKey returns the current user's sealed sender key
+func (s *Server) handleGetMySealedSenderKey(w http.ResponseWriter, r *http.Request) {
+	userID := r.Context().Value("userID").(uuid.UUID)
+
+	key, err := s.cryptoService.GetSealedSenderKey(r.Context(), userID)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to get sealed sender key: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	if key == nil {
+		http.Error(w, "No sealed sender key found", http.StatusNotFound)
+		return
+	}
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"id":               key.ID,
+		"kyber_public_key": base64Encode(key.KyberPublicKey),
+		"fingerprint":      key.KeyFingerprint,
+		"version":          key.KeyVersion,
+		"created_at":       key.CreatedAt,
+		"expires_at":       key.ExpiresAt,
+	})
+}
+
+// handleGetSealedSenderStatus returns the sealed sender status for the current user
+func (s *Server) handleGetSealedSenderStatus(w http.ResponseWriter, r *http.Request) {
+	userID := r.Context().Value("userID").(uuid.UUID)
+
+	status, err := s.cryptoService.GetSealedSenderStatus(r.Context(), userID)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to get sealed sender status: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	response := models.SealedSenderStatusResponse{
+		Enabled:          status.Enabled,
+		HasSealedKey:     status.HasSealedKey,
+		HasDeliveryToken: status.HasDeliveryToken,
+		KeyFingerprint:   status.KeyFingerprint,
+		KeyVersion:       status.KeyVersion,
+	}
+
+	json.NewEncoder(w).Encode(response)
+}
+
+// handleSetSealedSenderEnabled enables or disables sealed sender for the current user
+func (s *Server) handleSetSealedSenderEnabled(w http.ResponseWriter, r *http.Request) {
+	userID := r.Context().Value("userID").(uuid.UUID)
+
+	var req struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if err := s.cryptoService.SetSealedSenderEnabled(r.Context(), userID, req.Enabled); err != nil {
+		http.Error(w, fmt.Sprintf("Failed to update sealed sender setting: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"enabled": req.Enabled,
+	})
+}
+
+// handleGetPreKeyBundleWithSealedSender returns a complete prekey bundle including sealed sender key
+func (s *Server) handleGetPreKeyBundleWithSealedSender(w http.ResponseWriter, r *http.Request) {
+	requestingUserID := r.Context().Value("userID").(uuid.UUID)
+
+	vars := mux.Vars(r)
+	targetUserIDStr := vars["user_id"]
+
+	targetUserID, err := uuid.Parse(targetUserIDStr)
+	if err != nil {
+		http.Error(w, "Invalid user ID", http.StatusBadRequest)
+		return
+	}
+
+	// Rate limit prekey bundle fetches
+	clientIP := r.Header.Get("X-Forwarded-For")
+	if clientIP == "" {
+		clientIP = r.RemoteAddr
+	}
+	if err := s.rateLimiter.CheckBundleFetch(r.Context(), requestingUserID.String(), targetUserID.String(), clientIP); err != nil {
+		if err == ratelimit.ErrTargetedAttack {
+			log.Printf("[WARN] Potential targeted prekey attack detected on user %s", targetUserID)
+		}
+		http.Error(w, "Rate limit exceeded", http.StatusTooManyRequests)
+		return
+	}
+
+	// Try hybrid bundle first, fall back to regular bundle
+	hybridBundle, err := s.cryptoService.GetHybridPreKeyBundleWithSealedSender(r.Context(), targetUserID, requestingUserID)
+	if err == nil && hybridBundle != nil && hybridBundle.SignedPreKey != nil {
+		// Return hybrid bundle with sealed sender
+		response := map[string]interface{}{
+			"user_id":        hybridBundle.UserID,
+			"bundle_version": hybridBundle.BundleVersion,
+			"generated_at":   hybridBundle.GeneratedAt,
+		}
+
+		if hybridBundle.IdentityKey != nil {
+			response["identity_key"] = map[string]interface{}{
+				"public_key":  base64Encode(hybridBundle.IdentityKey.PublicKey),
+				"fingerprint": hybridBundle.IdentityKey.KeyFingerprint,
+				"version":     hybridBundle.IdentityKey.KeyVersion,
+			}
+		}
+
+		if hybridBundle.SignedPreKey != nil {
+			response["signed_prekey"] = map[string]interface{}{
+				"key_id":           hybridBundle.SignedPreKey.KeyID,
+				"ec_public_key":    base64Encode(hybridBundle.SignedPreKey.ECPublicKey),
+				"pq_public_key":    base64Encode(hybridBundle.SignedPreKey.PQPublicKey),
+				"signature":        base64Encode(hybridBundle.SignedPreKey.Signature),
+				"fingerprint":      hybridBundle.SignedPreKey.KeyFingerprint,
+				"hybrid_version":   hybridBundle.SignedPreKey.HybridVersion,
+			}
+		}
+
+		if hybridBundle.OneTimePreKey != nil {
+			response["one_time_prekey"] = map[string]interface{}{
+				"id":              hybridBundle.OneTimePreKey.ID,
+				"key_id":          hybridBundle.OneTimePreKey.KeyID,
+				"ec_public_key":   base64Encode(hybridBundle.OneTimePreKey.ECPublicKey),
+				"pq_public_key":   base64Encode(hybridBundle.OneTimePreKey.PQPublicKey),
+				"hybrid_version":  hybridBundle.OneTimePreKey.HybridVersion,
+			}
+		}
+
+		// Add sealed sender key
+		if hybridBundle.SealedSenderKey != nil {
+			response["sealed_sender_key"] = map[string]interface{}{
+				"kyber_public_key": base64Encode(hybridBundle.SealedSenderKey.KyberPublicKey),
+				"fingerprint":      hybridBundle.SealedSenderKey.KeyFingerprint,
+				"version":          hybridBundle.SealedSenderKey.KeyVersion,
+			}
+		}
+
+		// Add delivery verifier
+		if hybridBundle.DeliveryVerifier != nil {
+			response["delivery_verifier"] = base64Encode(hybridBundle.DeliveryVerifier)
+		}
+
+		json.NewEncoder(w).Encode(response)
+		return
+	}
+
+	// Fall back to regular bundle with sealed sender
+	bundle, err := s.cryptoService.GetPreKeyBundleWithSealedSender(r.Context(), targetUserID, requestingUserID)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to get prekey bundle: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	response := map[string]interface{}{
+		"user_id":        bundle.UserID,
+		"bundle_version": bundle.BundleVersion,
+		"generated_at":   bundle.GeneratedAt,
+	}
+
+	if bundle.IdentityKey != nil {
+		response["identity_key"] = map[string]interface{}{
+			"public_key":  base64Encode(bundle.IdentityKey.PublicKey),
+			"fingerprint": bundle.IdentityKey.KeyFingerprint,
+			"version":     bundle.IdentityKey.KeyVersion,
+		}
+	}
+
+	if bundle.SignedPreKey != nil {
+		response["signed_prekey"] = map[string]interface{}{
+			"key_id":           bundle.SignedPreKey.KeyID,
+			"kyber_public_key": base64Encode(bundle.SignedPreKey.KyberPublicKey),
+			"signature":        base64Encode(bundle.SignedPreKey.Signature),
+			"fingerprint":      bundle.SignedPreKey.KeyFingerprint,
+		}
+	}
+
+	if bundle.OneTimePreKey != nil {
+		response["one_time_prekey"] = map[string]interface{}{
+			"id":               bundle.OneTimePreKey.ID,
+			"key_id":           bundle.OneTimePreKey.KeyID,
+			"kyber_public_key": base64Encode(bundle.OneTimePreKey.KyberPublicKey),
+		}
+	}
+
+	// Add sealed sender key
+	if bundle.SealedSenderKey != nil {
+		response["sealed_sender_key"] = map[string]interface{}{
+			"kyber_public_key": base64Encode(bundle.SealedSenderKey.KyberPublicKey),
+			"fingerprint":      bundle.SealedSenderKey.KeyFingerprint,
+			"version":          bundle.SealedSenderKey.KeyVersion,
+		}
+	}
+
+	// Add delivery verifier
+	if bundle.DeliveryVerifier != nil {
+		response["delivery_verifier"] = base64Encode(bundle.DeliveryVerifier)
+	}
+
+	json.NewEncoder(w).Encode(response)
+}
+
+// ============================================================================
+// Key Transparency Handlers
+// ============================================================================
+
+// handleGetTransparencyRoot returns the current signed tree head (public endpoint)
+func (s *Server) handleGetTransparencyRoot(w http.ResponseWriter, r *http.Request) {
+	if s.transparencyService == nil {
+		http.Error(w, "Key transparency not enabled", http.StatusServiceUnavailable)
+		return
+	}
+
+	sth, err := s.transparencyService.GetSignedTreeHead(r.Context())
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to get tree head: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	if sth == nil {
+		http.Error(w, "No transparency data available yet", http.StatusNotFound)
+		return
+	}
+
+	json.NewEncoder(w).Encode(sth.ToResponse())
+}
+
+// handleGetConsistencyProof returns a consistency proof between two epochs (public endpoint)
+func (s *Server) handleGetConsistencyProof(w http.ResponseWriter, r *http.Request) {
+	if s.transparencyService == nil {
+		http.Error(w, "Key transparency not enabled", http.StatusServiceUnavailable)
+		return
+	}
+
+	fromEpochStr := r.URL.Query().Get("from")
+	toEpochStr := r.URL.Query().Get("to")
+
+	if fromEpochStr == "" || toEpochStr == "" {
+		http.Error(w, "Both 'from' and 'to' epoch parameters are required", http.StatusBadRequest)
+		return
+	}
+
+	fromEpoch, err := strconv.ParseInt(fromEpochStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid 'from' epoch", http.StatusBadRequest)
+		return
+	}
+
+	toEpoch, err := strconv.ParseInt(toEpochStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid 'to' epoch", http.StatusBadRequest)
+		return
+	}
+
+	proof, err := s.transparencyService.GetConsistencyProof(r.Context(), fromEpoch, toEpoch)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to get consistency proof: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	json.NewEncoder(w).Encode(proof.ToResponse())
+}
+
+// handleGetAuditLog returns the public audit log (public endpoint)
+func (s *Server) handleGetAuditLog(w http.ResponseWriter, r *http.Request) {
+	if s.transparencyService == nil {
+		http.Error(w, "Key transparency not enabled", http.StatusServiceUnavailable)
+		return
+	}
+
+	fromEpochStr := r.URL.Query().Get("from_epoch")
+	limitStr := r.URL.Query().Get("limit")
+
+	var fromEpoch int64 = 0
+	if fromEpochStr != "" {
+		parsed, err := strconv.ParseInt(fromEpochStr, 10, 64)
+		if err == nil {
+			fromEpoch = parsed
+		}
+	}
+
+	limit := 100
+	if limitStr != "" {
+		if parsed, err := strconv.Atoi(limitStr); err == nil && parsed > 0 && parsed <= 1000 {
+			limit = parsed
+		}
+	}
+
+	entries, err := s.transparencyService.GetAuditLog(r.Context(), fromEpoch, limit)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to get audit log: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// Convert to response format
+	responseEntries := make([]interface{}, len(entries))
+	for i, entry := range entries {
+		responseEntries[i] = entry.ToResponse()
+	}
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"entries": responseEntries,
+	})
+}
+
+// handleGetSigningKeys returns the transparency signing public keys (public endpoint)
+func (s *Server) handleGetSigningKeys(w http.ResponseWriter, r *http.Request) {
+	if s.transparencyService == nil {
+		http.Error(w, "Key transparency not enabled", http.StatusServiceUnavailable)
+		return
+	}
+
+	keys, err := s.transparencyService.GetSigningKeys(r.Context())
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to get signing keys: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// Convert to response format
+	responseKeys := make([]interface{}, len(keys))
+	for i, key := range keys {
+		responseKeys[i] = key.ToResponse()
+	}
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"signing_keys": responseKeys,
+	})
+}
+
+// handleGetInclusionProof returns an inclusion proof for a user's key (protected endpoint)
+func (s *Server) handleGetInclusionProof(w http.ResponseWriter, r *http.Request) {
+	if s.transparencyService == nil {
+		http.Error(w, "Key transparency not enabled", http.StatusServiceUnavailable)
+		return
+	}
+
+	userIDStr := r.URL.Query().Get("user_id")
+	if userIDStr == "" {
+		http.Error(w, "user_id parameter is required", http.StatusBadRequest)
+		return
+	}
+
+	userID, err := uuid.Parse(userIDStr)
+	if err != nil {
+		http.Error(w, "Invalid user_id", http.StatusBadRequest)
+		return
+	}
+
+	var epoch int64 = 0
+	epochStr := r.URL.Query().Get("epoch")
+	if epochStr != "" {
+		parsed, err := strconv.ParseInt(epochStr, 10, 64)
+		if err == nil {
+			epoch = parsed
+		}
+	}
+
+	proof, err := s.transparencyService.GetInclusionProof(r.Context(), userID, epoch)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to get inclusion proof: %v", err), http.StatusNotFound)
+		return
+	}
+
+	json.NewEncoder(w).Encode(proof.ToResponse())
+}
+
+// handleUpdateClientState updates a client's verified epoch state (protected endpoint)
+func (s *Server) handleUpdateClientState(w http.ResponseWriter, r *http.Request) {
+	if s.transparencyService == nil {
+		http.Error(w, "Key transparency not enabled", http.StatusServiceUnavailable)
+		return
+	}
+
+	userID := r.Context().Value("userID").(uuid.UUID)
+
+	var req struct {
+		DeviceID string `json:"device_id"`
+		Epoch    int64  `json:"epoch"`
+		RootHash string `json:"root_hash"` // Base64 encoded
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if req.DeviceID == "" {
+		http.Error(w, "device_id is required", http.StatusBadRequest)
+		return
+	}
+
+	rootHash, err := base64Decode(req.RootHash)
+	if err != nil {
+		http.Error(w, "Invalid base64 encoding for root_hash", http.StatusBadRequest)
+		return
+	}
+
+	err = s.transparencyService.UpdateClientState(r.Context(), userID, req.DeviceID, req.Epoch, rootHash)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to update client state: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"epoch":   req.Epoch,
+	})
+}
+
+// handleGetClientState returns a client's verified epoch state (protected endpoint)
+func (s *Server) handleGetClientState(w http.ResponseWriter, r *http.Request) {
+	if s.transparencyService == nil {
+		http.Error(w, "Key transparency not enabled", http.StatusServiceUnavailable)
+		return
+	}
+
+	userID := r.Context().Value("userID").(uuid.UUID)
+	deviceID := r.URL.Query().Get("device_id")
+
+	if deviceID == "" {
+		http.Error(w, "device_id parameter is required", http.StatusBadRequest)
+		return
+	}
+
+	state, err := s.transparencyService.GetClientState(r.Context(), userID, deviceID)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to get client state: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	if state == nil {
+		http.Error(w, "No client state found", http.StatusNotFound)
+		return
+	}
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"user_id":               state.UserID,
+		"device_id":             state.DeviceID,
+		"last_verified_epoch":   state.LastVerifiedEpoch,
+		"last_verified_root_hash": base64Encode(state.LastVerifiedRootHash),
+		"verified_at":           state.VerifiedAt,
+	})
+}
+
+// ============================================================================
+// Transparency Adapter for Crypto Service
+// ============================================================================
+
+// transparencyQueuerAdapter adapts the transparency.Service to the crypto.TransparencyQueuer interface
+type transparencyQueuerAdapter struct {
+	service *transparency.Service
+}
+
+// QueueKeyUpdate implements crypto.TransparencyQueuer
+func (a *transparencyQueuerAdapter) QueueKeyUpdate(update crypto.TransparencyKeyUpdate) {
+	a.service.QueueKeyUpdate(transparency.KeyUpdate{
+		UserID:                  update.UserID,
+		IdentityKeyFingerprint:  update.IdentityKeyFingerprint,
+		SignedPreKeyFingerprint: update.SignedPreKeyFingerprint,
+		KeyVersion:              update.KeyVersion,
+		UpdateType:              update.UpdateType,
+	})
 }

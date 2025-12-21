@@ -4,6 +4,7 @@ import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/hooks";
 import { ChatSidebar } from "@/components/chat/sidebar";
+import { OfflineBanner } from "@/components/offline-banner";
 
 export default function ChatLayout({
   children,
@@ -47,9 +48,12 @@ export default function ChatLayout({
   }
 
   return (
-    <div className="flex h-screen overflow-hidden">
-      <ChatSidebar />
-      <main className="flex-1 flex flex-col overflow-hidden">{children}</main>
+    <div className="flex flex-col h-screen overflow-hidden">
+      <OfflineBanner />
+      <div className="flex flex-1 overflow-hidden">
+        <ChatSidebar />
+        <main className="flex-1 flex flex-col overflow-hidden">{children}</main>
+      </div>
     </div>
   );
 }

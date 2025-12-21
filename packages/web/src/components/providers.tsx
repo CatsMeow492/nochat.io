@@ -5,6 +5,7 @@ import { ThemeProvider } from "next-themes";
 import { useState } from "react";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { AuthInitializer } from "@/components/auth-initializer";
+import { CryptoInitializer } from "@/components/crypto-initializer";
 
 export function Providers({ children }: { children: React.ReactNode }) {
   const [queryClient] = useState(
@@ -29,6 +30,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
       >
         <TooltipProvider delayDuration={300}>
           <AuthInitializer />
+          <CryptoInitializer />
           {children}
         </TooltipProvider>
       </ThemeProvider>
