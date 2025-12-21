@@ -35,6 +35,9 @@ COMMENT ON COLUMN one_time_prekeys.ec_public_key IS 'X25519 public key (32 bytes
 COMMENT ON COLUMN one_time_prekeys.hybrid_version IS 'Key version: 1=legacy (EC or PQ only), 2=PQXDH hybrid (X25519+Kyber)';
 
 -- Update the claim function to also return EC key for hybrid prekeys
+-- Must drop first because return type is changing
+DROP FUNCTION IF EXISTS claim_one_time_prekey(UUID, UUID);
+
 CREATE OR REPLACE FUNCTION claim_one_time_prekey(
     target_user_id UUID,
     claiming_user_id UUID
