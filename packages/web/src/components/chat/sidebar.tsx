@@ -31,6 +31,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { useAuth, useConversations } from "@/hooks";
 import { useCryptoStore } from "@/stores";
 import { cn } from "@/lib/utils";
+import { NewConversationDialog } from "./new-conversation-dialog";
 
 function SidebarContent() {
   const router = useRouter();
@@ -40,6 +41,21 @@ function SidebarContent() {
     useConversations();
   const { status: encryptionStatus, identityFingerprint } = useCryptoStore();
   const [searchQuery, setSearchQuery] = useState("");
+  const [newConversationOpen, setNewConversationOpen] = useState(false);
+
+  const handleCreateConversation = async (participantIds: string[]) => {
+    createConversation(
+      { type: "direct", participantIds },
+      {
+        onSuccess: (data: { conversation: { id: string } }) => {
+          setNewConversationOpen(false);
+          if (data?.conversation?.id) {
+            router.push(`/chat/${data.conversation.id}`);
+          }
+        },
+      }
+    );
+  };
 
   const filteredConversations = conversations.filter((conv: any) => {
     if (!searchQuery) return true;
@@ -109,12 +125,19 @@ function SidebarContent() {
           <Button
             variant="ghost"
             className="w-full justify-start gap-3 mb-2 text-muted-foreground hover:text-foreground"
-            onClick={() => createConversation({ type: "direct" })}
-            disabled={isCreating}
+            onClick={() => setNewConversationOpen(true)}
           >
             <Plus className="w-4 h-4" />
             New Conversation
           </Button>
+
+          {/* New Conversation Dialog */}
+          <NewConversationDialog
+            open={newConversationOpen}
+            onOpenChange={setNewConversationOpen}
+            onCreateConversation={handleCreateConversation}
+            isCreating={isCreating}
+          />
 
           <Separator className="my-2" />
 

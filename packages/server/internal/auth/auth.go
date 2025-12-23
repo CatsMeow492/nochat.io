@@ -296,6 +296,78 @@ func (s *Service) ValidateSessionToken(token string) (uuid.UUID, error) {
 	return userID, nil
 }
 
+// SearchUsers searches for users by email, username, or user ID (UUID)
+// Excludes anonymous users and the requesting user from results
+func (s *Service) SearchUsers(ctx context.Context, query string, excludeUserID uuid.UUID, limit int) ([]*models.User, error) {
+	if limit <= 0 || limit > 20 {
+		limit = 10
+	}
+
+	// Clean up the query
+	query = strings.TrimSpace(query)
+	if len(query) < 2 {
+		return []*models.User{}, nil
+	}
+
+	// Try to parse as UUID first (exact match)
+	if parsedID, err := uuid.Parse(query); err == nil {
+		var user models.User
+		err := s.db.QueryRowContext(ctx, `
+			SELECT id, username, email, display_name, wallet_address, avatar_url,
+			       is_anonymous, created_at, updated_at, last_seen_at
+			FROM users
+			WHERE id = $1 AND is_anonymous = false AND id != $2
+		`, parsedID, excludeUserID).Scan(
+			&user.ID, &user.Username, &user.Email, &user.DisplayName,
+			&user.WalletAddress, &user.AvatarURL, &user.IsAnonymous,
+			&user.CreatedAt, &user.UpdatedAt, &user.LastSeenAt,
+		)
+		if err == sql.ErrNoRows {
+			return []*models.User{}, nil
+		}
+		if err != nil {
+			return nil, fmt.Errorf("failed to search by ID: %w", err)
+		}
+		return []*models.User{&user}, nil
+	}
+
+	// Search by email (exact match) or username (prefix match)
+	users := []*models.User{}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, username, email, display_name, wallet_address, avatar_url,
+		       is_anonymous, created_at, updated_at, last_seen_at
+		FROM users
+		WHERE is_anonymous = false
+		  AND id != $1
+		  AND (
+		      LOWER(email) = LOWER($2)
+		      OR LOWER(username) LIKE LOWER($3)
+		  )
+		ORDER BY
+		  CASE WHEN LOWER(email) = LOWER($2) THEN 0 ELSE 1 END,
+		  username ASC
+		LIMIT $4
+	`, excludeUserID, query, query+"%", limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to search users: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var user models.User
+		if err := rows.Scan(
+			&user.ID, &user.Username, &user.Email, &user.DisplayName,
+			&user.WalletAddress, &user.AvatarURL, &user.IsAnonymous,
+			&user.CreatedAt, &user.UpdatedAt, &user.LastSeenAt,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan user: %w", err)
+		}
+		users = append(users, &user)
+	}
+
+	return users, nil
+}
+
 func stringPtr(s string) *string {
 	return &s
 }

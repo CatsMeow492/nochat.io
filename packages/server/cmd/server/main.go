@@ -189,6 +189,7 @@ func (s *Server) setupRouter() *mux.Router {
 
 	// User routes (protected)
 	router.HandleFunc("/api/users/me", s.authMiddleware(s.handleGetCurrentUser)).Methods("GET")
+	router.HandleFunc("/api/users/search", s.authMiddleware(s.handleSearchUsers)).Methods("GET")
 	router.HandleFunc("/api/users/{id}", s.authMiddleware(s.handleGetUser)).Methods("GET")
 
 	// ICE servers (for WebRTC)
@@ -444,6 +445,52 @@ func (s *Server) handleGetUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	json.NewEncoder(w).Encode(user)
+}
+
+func (s *Server) handleSearchUsers(w http.ResponseWriter, r *http.Request) {
+	currentUserID := r.Context().Value("userID").(uuid.UUID)
+
+	query := r.URL.Query().Get("q")
+	if query == "" {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"users": []interface{}{},
+		})
+		return
+	}
+
+	limitStr := r.URL.Query().Get("limit")
+	limit := 10
+	if limitStr != "" {
+		if parsed, err := strconv.Atoi(limitStr); err == nil && parsed > 0 && parsed <= 20 {
+			limit = parsed
+		}
+	}
+
+	users, err := s.authService.SearchUsers(r.Context(), query, currentUserID, limit)
+	if err != nil {
+		log.Printf("[Server] Failed to search users: %v", err)
+		http.Error(w, "Failed to search users", http.StatusInternalServerError)
+		return
+	}
+
+	// Sanitize response (don't expose sensitive fields)
+	sanitized := make([]map[string]interface{}, len(users))
+	for i, u := range users {
+		sanitized[i] = map[string]interface{}{
+			"id":           u.ID,
+			"username":     u.Username,
+			"display_name": u.DisplayName,
+			"avatar_url":   u.AvatarURL,
+		}
+		// Only include email if it exists (for display purposes)
+		if u.Email != nil {
+			sanitized[i]["email"] = *u.Email
+		}
+	}
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"users": sanitized,
+	})
 }
 
 // ICE Servers Handler

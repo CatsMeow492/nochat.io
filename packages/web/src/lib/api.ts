@@ -104,6 +104,20 @@ class ApiClient {
     return this.request<{ user: any }>("/api/users/me");
   }
 
+  async searchUsers(query: string, limit?: number) {
+    const params = new URLSearchParams({ q: query });
+    if (limit) params.set("limit", limit.toString());
+    return this.request<{
+      users: Array<{
+        id: string;
+        username: string;
+        display_name: string;
+        email?: string;
+        avatar_url?: string;
+      }>;
+    }>(`/api/users/search?${params.toString()}`);
+  }
+
   // Conversations
   async getConversations() {
     return this.request<{ conversations: any[] }>("/api/conversations");
@@ -114,9 +128,15 @@ class ApiClient {
     name?: string;
     participantIds?: string[];
   }) {
+    // Backend expects "participants" field, not "participantIds"
+    const payload = {
+      type: data.type,
+      name: data.name,
+      participants: data.participantIds,
+    };
     return this.request<{ conversation: any }>("/api/conversations", {
       method: "POST",
-      body: JSON.stringify(data),
+      body: JSON.stringify(payload),
     });
   }
 
