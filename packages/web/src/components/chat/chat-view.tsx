@@ -10,6 +10,7 @@ import {
   Phone,
   Video,
   Info,
+  Trash2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -19,10 +20,11 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { useMessages } from "@/hooks";
+import { useMessages, useConversations } from "@/hooks";
 import { useAuthStore, useChatStore } from "@/stores";
 import { cn } from "@/lib/utils";
 
@@ -34,12 +36,14 @@ export function ChatView({ conversationId }: ChatViewProps) {
   const router = useRouter();
   const { user } = useAuthStore();
   const { typingUsers, setCurrentRoom } = useChatStore();
+  const { deleteConversation, isDeleting } = useConversations();
   const {
     messages,
     isLoading,
     sendMessage,
     isSending,
     isEncrypted,
+    isCryptoLoading,
     isP2PReady,
     sessionStatus,
     isDM,
@@ -59,6 +63,16 @@ export function ChatView({ conversationId }: ChatViewProps) {
     // Use conversation ID as the meeting room ID for continuity
     router.push(`/meeting/${conversationId}`);
   }, [router, conversationId]);
+
+  const handleDeleteConversation = useCallback(() => {
+    if (window.confirm("Are you sure you want to delete this conversation? This action cannot be undone.")) {
+      deleteConversation(conversationId, {
+        onSuccess: () => {
+          router.push("/chat");
+        },
+      });
+    }
+  }, [deleteConversation, conversationId, router]);
 
   // Set current room for unread tracking
   useEffect(() => {
@@ -171,6 +185,15 @@ export function ChatView({ conversationId }: ChatViewProps) {
                 <Info className="w-4 h-4 mr-2" />
                 Conversation info
               </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                onClick={handleDeleteConversation}
+                disabled={isDeleting}
+                className="text-destructive focus:text-destructive"
+              >
+                <Trash2 className="w-4 h-4 mr-2" />
+                {isDeleting ? "Deleting..." : "Delete conversation"}
+              </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
@@ -178,9 +201,14 @@ export function ChatView({ conversationId }: ChatViewProps) {
 
       {/* Messages Area */}
       <ScrollArea className="flex-1 p-4 scrollbar-thin">
-        {isLoading ? (
-          <div className="flex items-center justify-center h-full">
+        {isLoading || isCryptoLoading ? (
+          <div className="flex flex-col items-center justify-center h-full gap-4">
             <div className="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+            {isCryptoLoading && (
+              <p className="text-sm text-muted-foreground">
+                Initializing encryption...
+              </p>
+            )}
           </div>
         ) : messages.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-center">
@@ -282,11 +310,13 @@ export function ChatView({ conversationId }: ChatViewProps) {
               value={newMessage}
               onChange={(e) => setNewMessage(e.target.value)}
               placeholder={
-                encryptionReady
+                isCryptoLoading
+                  ? "Initializing encryption..."
+                  : encryptionReady
                   ? "Type an encrypted message..."
                   : "Waiting for encryption..."
               }
-              disabled={!encryptionReady}
+              disabled={!encryptionReady || isCryptoLoading}
               className="pr-12 bg-secondary/50 border-border focus-visible:ring-primary"
             />
             {encryptionReady && (
@@ -295,14 +325,19 @@ export function ChatView({ conversationId }: ChatViewProps) {
           </div>
           <Button
             type="submit"
-            disabled={!newMessage.trim() || isSending || !encryptionReady}
+            disabled={!newMessage.trim() || isSending || !encryptionReady || isCryptoLoading}
             className="px-4"
           >
             <Send className="w-5 h-5" />
           </Button>
         </form>
         <p className="text-xs text-muted-foreground mt-2 text-center">
-          {encryptionReady ? (
+          {isCryptoLoading ? (
+            <span className="flex items-center justify-center gap-1">
+              <div className="w-3 h-3 border border-primary border-t-transparent rounded-full animate-spin" />
+              Initializing encryption...
+            </span>
+          ) : encryptionReady ? (
             <span className="flex items-center justify-center gap-1">
               <Lock className={cn("w-3 h-3", isP2PReady ? "text-green-500" : "text-green-400")} />
               {isP2PReady

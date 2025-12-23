@@ -388,3 +388,52 @@ func (s *Service) SubscribeToConversation(ctx context.Context, conversationID uu
 	channel := fmt.Sprintf("messages:%s", conversationID.String())
 	return s.redis.Subscribe(ctx, channel)
 }
+
+// DeleteConversation removes a user from a conversation and soft-deletes if no participants remain
+// For direct messages, this effectively "leaves" the conversation for this user
+func (s *Service) DeleteConversation(ctx context.Context, conversationID, userID uuid.UUID) error {
+	// Verify user is a participant
+	var exists bool
+	err := s.db.QueryRowContext(ctx,
+		`SELECT EXISTS(SELECT 1 FROM participants WHERE conversation_id = $1 AND user_id = $2)`,
+		conversationID, userID,
+	).Scan(&exists)
+	if err != nil {
+		return fmt.Errorf("failed to check participation: %w", err)
+	}
+	if !exists {
+		return fmt.Errorf("user is not a participant of this conversation")
+	}
+
+	// Remove user from participants
+	_, err = s.db.ExecContext(ctx,
+		`DELETE FROM participants WHERE conversation_id = $1 AND user_id = $2`,
+		conversationID, userID,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to remove participant: %w", err)
+	}
+
+	// Check if any participants remain
+	var remainingCount int
+	err = s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM participants WHERE conversation_id = $1`,
+		conversationID,
+	).Scan(&remainingCount)
+	if err != nil {
+		return fmt.Errorf("failed to count remaining participants: %w", err)
+	}
+
+	// If no participants remain, soft-delete the conversation
+	if remainingCount == 0 {
+		_, err = s.db.ExecContext(ctx,
+			`UPDATE conversations SET is_active = false, updated_at = $1 WHERE id = $2`,
+			time.Now(), conversationID,
+		)
+		if err != nil {
+			return fmt.Errorf("failed to deactivate conversation: %w", err)
+		}
+	}
+
+	return nil
+}

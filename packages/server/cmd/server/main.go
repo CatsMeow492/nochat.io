@@ -201,6 +201,7 @@ func (s *Server) setupRouter() *mux.Router {
 	// Messaging routes (protected)
 	router.HandleFunc("/api/conversations", s.authMiddleware(s.handleCreateConversation)).Methods("POST")
 	router.HandleFunc("/api/conversations", s.authMiddleware(s.handleGetConversations)).Methods("GET")
+	router.HandleFunc("/api/conversations/{id}", s.authMiddleware(s.handleDeleteConversation)).Methods("DELETE")
 	router.HandleFunc("/api/conversations/{id}/participants", s.authMiddleware(s.handleGetParticipants)).Methods("GET")
 	router.HandleFunc("/api/conversations/{id}/messages", s.authMiddleware(s.handleGetMessages)).Methods("GET")
 	router.HandleFunc("/api/conversations/{id}/messages", s.authMiddleware(s.handleSendMessage)).Methods("POST")
@@ -578,6 +579,27 @@ func (s *Server) handleGetConversations(w http.ResponseWriter, r *http.Request) 
 
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"conversations": conversations,
+	})
+}
+
+func (s *Server) handleDeleteConversation(w http.ResponseWriter, r *http.Request) {
+	userID := r.Context().Value("userID").(uuid.UUID)
+
+	vars := mux.Vars(r)
+	convID, err := uuid.Parse(vars["id"])
+	if err != nil {
+		http.Error(w, "Invalid conversation ID", http.StatusBadRequest)
+		return
+	}
+
+	if err := s.messagingService.DeleteConversation(r.Context(), convID, userID); err != nil {
+		log.Printf("[Server] Failed to delete conversation: %v", err)
+		http.Error(w, "Failed to delete conversation", http.StatusInternalServerError)
+		return
+	}
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
 	})
 }
 

@@ -140,6 +140,12 @@ class ApiClient {
     });
   }
 
+  async deleteConversation(conversationId: string) {
+    return this.request<{ success: boolean }>(`/api/conversations/${conversationId}`, {
+      method: "DELETE",
+    });
+  }
+
   async getMessages(conversationId: string, params?: { limit?: number; before?: string }) {
     const queryParams = new URLSearchParams();
     if (params?.limit) queryParams.set("limit", params.limit.toString());

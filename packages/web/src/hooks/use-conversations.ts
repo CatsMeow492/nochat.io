@@ -48,6 +48,13 @@ export function useConversations() {
     },
   });
 
+  const deleteConversationMutation = useMutation({
+    mutationFn: (conversationId: string) => api.deleteConversation(conversationId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["conversations"] });
+    },
+  });
+
   return {
     conversations: data?.conversations || [],
     isLoading,
@@ -55,6 +62,8 @@ export function useConversations() {
     refetch,
     createConversation: createConversationMutation.mutate,
     isCreating: createConversationMutation.isPending,
+    deleteConversation: deleteConversationMutation.mutate,
+    isDeleting: deleteConversationMutation.isPending,
   };
 }
 
@@ -64,6 +73,11 @@ export function useMessages(conversationId: string | null) {
   const queryClient = useQueryClient();
 
   const isEncryptionReady = encryptionStatus === "encrypted" && cryptoService.isInitialized();
+  // Check if crypto is still initializing (not yet reached "encrypted" or "error")
+  const isCryptoLoading =
+    encryptionStatus === "uninitialized" ||
+    encryptionStatus === "initializing" ||
+    encryptionStatus === "ready";
   const currentUserId = user?.id;
 
   // Track if we've established sessions for this conversation
@@ -128,6 +142,7 @@ export function useMessages(conversationId: string | null) {
       if (!isEncryptionReady || !isDM || peerIds.length === 0) {
         logECDH("Skipping session establishment:", {
           isEncryptionReady,
+          isCryptoLoading,
           isDM,
           peerCount: peerIds.length,
           participantsLoaded,
@@ -135,8 +150,11 @@ export function useMessages(conversationId: string | null) {
           currentUserId,
           participantUserIds: participantsData?.participants?.map((p) => p.user_id),
         });
-        // Only mark as unavailable if participants ARE loaded and we still have no peers
-        if (participantsLoaded && peerIds.length !== 1) {
+        // Only mark as unavailable if:
+        // 1. Crypto is NOT still loading (has finished initializing)
+        // 2. Participants ARE loaded
+        // 3. This is not a 1:1 DM
+        if (!isCryptoLoading && participantsLoaded && peerIds.length !== 1) {
           setSessionStatus("unavailable");
           setSessionReady(true);
         }
@@ -182,7 +200,7 @@ export function useMessages(conversationId: string | null) {
     };
 
     establishSessions();
-  }, [isEncryptionReady, isDM, peerIds, conversationId, participantsLoaded, participantsData?.participants, currentUserId]);
+  }, [isEncryptionReady, isCryptoLoading, isDM, peerIds, conversationId, participantsLoaded, participantsData?.participants, currentUserId]);
 
   // Reset session state when conversation changes
   useEffect(() => {
@@ -403,6 +421,7 @@ export function useMessages(conversationId: string | null) {
     sendMessage: sendMessageMutation.mutate,
     isSending: sendMessageMutation.isPending,
     isEncrypted: isEncryptionReady,
+    isCryptoLoading, // Expose whether crypto is still initializing
     isDM, // Expose whether this is a true P2P encrypted DM
     peerIds, // Expose peer IDs for debugging/display
     sessionReady, // Expose whether ECDH session is ready (any state that allows messaging)
