@@ -41,6 +41,7 @@ var (
 type Server struct {
 	db                   *db.DB
 	authService          *auth.Service
+	oauthService         *auth.OAuthService
 	signalingService     *signaling.Service
 	messagingService     *messaging.Service
 	storageService       *storage.Service
@@ -67,6 +68,21 @@ func main() {
 
 	// Initialize services
 	authService := auth.NewService(database.Postgres)
+
+	// Initialize OAuth service
+	oauthConfig := auth.OAuthConfig{
+		GoogleClientID:     os.Getenv("GOOGLE_CLIENT_ID"),
+		GoogleClientSecret: os.Getenv("GOOGLE_CLIENT_SECRET"),
+		GitHubClientID:     os.Getenv("GITHUB_CLIENT_ID"),
+		GitHubClientSecret: os.Getenv("GITHUB_CLIENT_SECRET"),
+		AppleClientID:      os.Getenv("APPLE_CLIENT_ID"),
+		AppleClientSecret:  os.Getenv("APPLE_CLIENT_SECRET"),
+		AppleTeamID:        os.Getenv("APPLE_TEAM_ID"),
+		AppleKeyID:         os.Getenv("APPLE_KEY_ID"),
+		RedirectBaseURL:    getEnvOrDefault("OAUTH_REDIRECT_BASE_URL", "http://localhost:8080"),
+		FrontendURL:        getEnvOrDefault("FRONTEND_URL", "http://localhost:3000"),
+	}
+	oauthService := auth.NewOAuthService(database.Postgres, oauthConfig)
 	signalingService := signaling.NewService(database.Redis)
 	messagingService := messaging.NewService(database.Postgres, database.Redis)
 	storageService, err := storage.NewService(database.Postgres)
@@ -99,6 +115,7 @@ func main() {
 	server := &Server{
 		db:                   database,
 		authService:          authService,
+		oauthService:         oauthService,
 		signalingService:     signalingService,
 		messagingService:     messagingService,
 		storageService:       storageService,
@@ -165,6 +182,10 @@ func (s *Server) setupRouter() *mux.Router {
 	router.HandleFunc("/api/auth/signin", s.handleSignin).Methods("POST")
 	router.HandleFunc("/api/auth/anonymous", s.handleAnonymous).Methods("POST")
 	router.HandleFunc("/api/auth/wallet", s.handleWalletAuth).Methods("POST")
+
+	// OAuth routes
+	router.HandleFunc("/api/auth/oauth/{provider}", s.handleOAuthInitiate).Methods("GET")
+	router.HandleFunc("/api/auth/oauth/{provider}/callback", s.handleOAuthCallback).Methods("GET", "POST")
 
 	// User routes (protected)
 	router.HandleFunc("/api/users/me", s.authMiddleware(s.handleGetCurrentUser)).Methods("GET")
@@ -1483,4 +1504,170 @@ func (a *transparencyQueuerAdapter) QueueKeyUpdate(update crypto.TransparencyKey
 		KeyVersion:              update.KeyVersion,
 		UpdateType:              update.UpdateType,
 	})
+}
+
+// ============================================================================
+// OAuth Handlers
+// ============================================================================
+
+func (s *Server) handleOAuthInitiate(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	providerStr := vars["provider"]
+
+	var provider auth.OAuthProvider
+	switch providerStr {
+	case "google":
+		provider = auth.ProviderGoogle
+	case "github":
+		provider = auth.ProviderGitHub
+	case "apple":
+		provider = auth.ProviderApple
+	default:
+		http.Error(w, "Unsupported OAuth provider", http.StatusBadRequest)
+		return
+	}
+
+	// Generate state for CSRF protection
+	state, err := s.oauthService.GenerateState()
+	if err != nil {
+		http.Error(w, "Failed to generate state", http.StatusInternalServerError)
+		return
+	}
+
+	// Store state in a cookie (expires in 10 minutes)
+	http.SetCookie(w, &http.Cookie{
+		Name:     "oauth_state",
+		Value:    state,
+		Path:     "/",
+		MaxAge:   600,
+		HttpOnly: true,
+		Secure:   r.TLS != nil,
+		SameSite: http.SameSiteLaxMode,
+	})
+
+	// Get auth URL and redirect
+	authURL, err := s.oauthService.GetAuthURL(provider, state)
+	if err != nil {
+		if err == auth.ErrOAuthProviderNotSupported {
+			http.Error(w, fmt.Sprintf("%s OAuth is not configured", providerStr), http.StatusNotImplemented)
+			return
+		}
+		http.Error(w, "Failed to generate auth URL", http.StatusInternalServerError)
+		return
+	}
+
+	http.Redirect(w, r, authURL, http.StatusTemporaryRedirect)
+}
+
+func (s *Server) handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	providerStr := vars["provider"]
+
+	var provider auth.OAuthProvider
+	switch providerStr {
+	case "google":
+		provider = auth.ProviderGoogle
+	case "github":
+		provider = auth.ProviderGitHub
+	case "apple":
+		provider = auth.ProviderApple
+	default:
+		http.Error(w, "Unsupported OAuth provider", http.StatusBadRequest)
+		return
+	}
+
+	// Get code and state from query (GET) or form (POST for Apple)
+	var code, state string
+	if r.Method == "POST" {
+		// Apple sends response as form POST
+		if err := r.ParseForm(); err != nil {
+			http.Error(w, "Failed to parse form", http.StatusBadRequest)
+			return
+		}
+		code = r.FormValue("code")
+		state = r.FormValue("state")
+	} else {
+		code = r.URL.Query().Get("code")
+		state = r.URL.Query().Get("state")
+	}
+
+	if code == "" {
+		// Check for error response
+		errorMsg := r.URL.Query().Get("error")
+		if errorMsg == "" {
+			errorMsg = r.FormValue("error")
+		}
+		if errorMsg != "" {
+			s.redirectToFrontendWithError(w, r, "OAuth error: "+errorMsg)
+			return
+		}
+		s.redirectToFrontendWithError(w, r, "Missing authorization code")
+		return
+	}
+
+	// Verify state from cookie
+	stateCookie, err := r.Cookie("oauth_state")
+	if err != nil || stateCookie.Value != state {
+		s.redirectToFrontendWithError(w, r, "Invalid OAuth state")
+		return
+	}
+
+	// Clear state cookie
+	http.SetCookie(w, &http.Cookie{
+		Name:     "oauth_state",
+		Value:    "",
+		Path:     "/",
+		MaxAge:   -1,
+		HttpOnly: true,
+	})
+
+	// Exchange code for user info
+	userInfo, err := s.oauthService.ExchangeCode(r.Context(), provider, code)
+	if err != nil {
+		log.Printf("[OAuth] Failed to exchange code: %v", err)
+		s.redirectToFrontendWithError(w, r, "Failed to authenticate with "+providerStr)
+		return
+	}
+
+	// Find or create user
+	user, err := s.oauthService.FindOrCreateUser(r.Context(), provider, userInfo)
+	if err != nil {
+		log.Printf("[OAuth] Failed to find/create user: %v", err)
+		s.redirectToFrontendWithError(w, r, "Failed to create account")
+		return
+	}
+
+	// Generate session token
+	token, err := s.authService.GenerateSessionToken(user.ID)
+	if err != nil {
+		log.Printf("[OAuth] Failed to generate token: %v", err)
+		s.redirectToFrontendWithError(w, r, "Failed to create session")
+		return
+	}
+
+	// Redirect to frontend with token
+	s.redirectToFrontendWithToken(w, r, token)
+}
+
+func (s *Server) redirectToFrontendWithToken(w http.ResponseWriter, r *http.Request, token string) {
+	frontendURL := getEnvOrDefault("FRONTEND_URL", "http://localhost:3000")
+	redirectURL := fmt.Sprintf("%s/oauth/callback?token=%s", frontendURL, token)
+	http.Redirect(w, r, redirectURL, http.StatusTemporaryRedirect)
+}
+
+func (s *Server) redirectToFrontendWithError(w http.ResponseWriter, r *http.Request, errorMsg string) {
+	frontendURL := getEnvOrDefault("FRONTEND_URL", "http://localhost:3000")
+	redirectURL := fmt.Sprintf("%s/oauth/callback?error=%s", frontendURL, errorMsg)
+	http.Redirect(w, r, redirectURL, http.StatusTemporaryRedirect)
+}
+
+// ============================================================================
+// Helper Functions
+// ============================================================================
+
+func getEnvOrDefault(key, defaultValue string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
+	}
+	return defaultValue
 }
