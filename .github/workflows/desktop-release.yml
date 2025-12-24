@@ -132,44 +132,46 @@ jobs:
           npm run build:frontend
 
       - name: Build Tauri (Universal Binary)
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
         run: |
           cd packages/desktop
-          # Temporarily disable signing in tauri.conf.json (we sign manually after)
-          sed -i '' 's/"signingIdentity":.*/"signingIdentity": null,/' src-tauri/tauri.conf.json
+          # Tauri will sign during build using APPLE_SIGNING_IDENTITY env var
+          # and the entitlements.plist configured in tauri.conf.json
           npx tauri build --target universal-apple-darwin
 
-      - name: Sign app bundle
-        env:
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+      - name: Verify app signing
         run: |
           APP="packages/desktop/target/universal-apple-darwin/release/bundle/macos/NoChat.app"
-
-          # Unlock keychain again (may have locked during build)
-          security unlock-keychain -p actions temp.keychain
-
-          # Show available identities for debugging
-          echo "Available signing identities:"
-          security find-identity -v -p codesigning temp.keychain
-
-          codesign --deep --force --verify --verbose \
-            --sign "$APPLE_SIGNING_IDENTITY" \
-            --options runtime \
-            --entitlements packages/desktop/src-tauri/entitlements.plist \
-            "$APP"
-
-          # Verify
+          echo "Verifying app bundle signature..."
           codesign --verify --verbose=2 "$APP"
+          echo "Checking signature details..."
+          codesign -dvv "$APP"
 
-      - name: Find and sign DMG
+      - name: Sign DMG
         env:
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
         run: |
+          # Unlock keychain (may have locked during build)
+          security unlock-keychain -p actions temp.keychain
+
           DMG=$(find packages/desktop/target -name "*.dmg" -type f | head -1)
-          codesign --sign "$APPLE_SIGNING_IDENTITY" --options runtime "$DMG"
+          echo "Signing DMG: $DMG"
+
+          # Sign with hardened runtime and timestamp (required for notarization)
+          codesign --sign "$APPLE_SIGNING_IDENTITY" \
+            --options runtime \
+            --timestamp \
+            --force \
+            "$DMG"
 
           # Rename with version
           DMG_DIR=$(dirname "$DMG")
           mv "$DMG" "$DMG_DIR/NoChat_${VERSION}_universal.dmg"
+
+          # Verify DMG signature
+          echo "Verifying DMG signature..."
+          codesign --verify --verbose=2 "$DMG_DIR/NoChat_${VERSION}_universal.dmg"
 
       - name: Notarize
         env:
