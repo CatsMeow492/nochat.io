@@ -137,9 +137,22 @@ export function DownloadButtons() {
   }
 
   if (error || !downloadInfo) {
+    // Fallback: direct link to GitHub releases
     return (
-      <div className="text-center text-muted-foreground">
-        <p className="text-sm">Desktop apps coming soon!</p>
+      <div className="flex flex-col items-center gap-4">
+        <Button size="lg" asChild className="gap-3 px-8 py-6 text-lg">
+          <a
+            href={`https://github.com/${GITHUB_OWNER}/${GITHUB_REPO}/releases/latest`}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            <Download className="w-5 h-5" />
+            Download Desktop App
+          </a>
+        </Button>
+        <p className="text-xs text-muted-foreground">
+          Available for macOS, Windows, and Linux
+        </p>
       </div>
     );
   }

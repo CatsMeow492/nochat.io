@@ -39,6 +39,9 @@ import {
   Smartphone,
   Globe,
   CheckCircle2,
+  Download,
+  Monitor,
+  Apple,
 } from "lucide-react";
 import { DownloadButtons } from "@/components/download-buttons";
 
@@ -172,8 +175,77 @@ export default function LandingPage() {
     { icon: Lock, text: "Zero-trust architecture" },
   ];
 
+  // Detect platform for download button
+  const [platform, setPlatform] = useState<"macos" | "windows" | "linux" | null>(null);
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const userAgent = navigator.userAgent.toLowerCase();
+      if (userAgent.includes("mac")) {
+        setPlatform("macos");
+      } else if (userAgent.includes("win")) {
+        setPlatform("windows");
+      } else if (userAgent.includes("linux")) {
+        setPlatform("linux");
+      }
+    }
+  }, []);
+
+  const PlatformIcon = platform === "macos" ? Apple : platform === "windows" ? Monitor : Download;
+  const platformName = platform === "macos" ? "macOS" : platform === "windows" ? "Windows" : "Linux";
+
   return (
     <main className="min-h-screen min-h-dvh flex flex-col w-full max-w-full overflow-x-hidden">
+      {/* Header / Navigation */}
+      <header className="sticky top-0 z-50 w-full border-b border-border/40 bg-background/80 backdrop-blur-lg">
+        <div className="max-w-7xl mx-auto flex items-center justify-between px-4 sm:px-6 h-16">
+          {/* Logo */}
+          <div className="flex items-center gap-2">
+            <span className="text-xl font-bold gradient-text">NoChat</span>
+          </div>
+
+          {/* Nav Links */}
+          <nav className="hidden md:flex items-center gap-6 text-sm">
+            <a href="#features" className="text-muted-foreground hover:text-foreground transition-colors">
+              Features
+            </a>
+            <a href="#security" className="text-muted-foreground hover:text-foreground transition-colors">
+              Security
+            </a>
+            <a href="#download" className="text-muted-foreground hover:text-foreground transition-colors">
+              Download
+            </a>
+            <Link href="/signin" className="text-muted-foreground hover:text-foreground transition-colors">
+              Sign In
+            </Link>
+          </nav>
+
+          {/* Download Button */}
+          <div className="flex items-center gap-3">
+            <Button
+              variant="default"
+              size="sm"
+              className="gap-2 hidden sm:flex"
+              asChild
+            >
+              <a href="#download">
+                <PlatformIcon className="w-4 h-4" />
+                Download for {platformName}
+              </a>
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="sm:hidden"
+              asChild
+            >
+              <a href="#download">
+                <Download className="w-4 h-4" />
+              </a>
+            </Button>
+          </div>
+        </div>
+      </header>
+
       {/* Hero Section */}
       <section className="flex-1 flex flex-col items-center justify-center px-4 sm:px-6 py-16 sm:py-24">
         <div className="w-full max-w-4xl mx-auto text-center space-y-8 sm:space-y-10">
@@ -252,11 +324,23 @@ export default function LandingPage() {
           <p className="text-sm text-muted-foreground pt-2">
             No account required. No data collected. No compromises.
           </p>
+
+          {/* Download CTA in Hero */}
+          <div className="pt-4">
+            <a
+              href="#download"
+              className="inline-flex items-center gap-2 text-primary hover:text-primary/80 transition-colors text-sm font-medium group"
+            >
+              <Download className="w-4 h-4" />
+              <span>Download the desktop app for the best experience</span>
+              <span className="group-hover:translate-x-1 transition-transform">→</span>
+            </a>
+          </div>
         </div>
       </section>
 
       {/* Features Section */}
-      <section className="py-16 sm:py-24 px-4 border-t border-border bg-card/30">
+      <section id="features" className="py-16 sm:py-24 px-4 border-t border-border bg-card/30 scroll-mt-16">
         <div className="max-w-6xl mx-auto">
           <div className="text-center mb-12 sm:mb-16">
             <h2 className="text-2xl sm:text-3xl md:text-4xl font-bold mb-4">
@@ -288,7 +372,7 @@ export default function LandingPage() {
       </section>
 
       {/* How It Works / Security Section */}
-      <section className="py-16 sm:py-24 px-4 border-t border-border">
+      <section id="security" className="py-16 sm:py-24 px-4 border-t border-border scroll-mt-16">
         <div className="max-w-4xl mx-auto">
           <div className="text-center mb-12 sm:mb-16">
             <h2 className="text-2xl sm:text-3xl md:text-4xl font-bold mb-4">
