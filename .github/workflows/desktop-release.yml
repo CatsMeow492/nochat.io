@@ -144,6 +144,13 @@ jobs:
         run: |
           APP="packages/desktop/target/universal-apple-darwin/release/bundle/macos/NoChat.app"
 
+          # Unlock keychain again (may have locked during build)
+          security unlock-keychain -p actions temp.keychain
+
+          # Show available identities for debugging
+          echo "Available signing identities:"
+          security find-identity -v -p codesigning temp.keychain
+
           codesign --deep --force --verify --verbose \
             --sign "$APPLE_SIGNING_IDENTITY" \
             --options runtime \
