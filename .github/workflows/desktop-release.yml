@@ -231,28 +231,26 @@ jobs:
           cd packages/desktop
           cargo tauri build
 
-      - name: Install AzureSignTool
-        if: ${{ secrets.AZURE_KEY_VAULT_URL != '' }}
-        run: dotnet tool install --global AzureSignTool
-
-      - name: Sign with Azure Key Vault
-        if: ${{ secrets.AZURE_KEY_VAULT_URL != '' }}
-        env:
-          AZURE_KEY_VAULT_URL: ${{ secrets.AZURE_KEY_VAULT_URL }}
-          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
-          AZURE_CERT_NAME: ${{ secrets.AZURE_CERT_NAME }}
-        run: |
-          $Installer = Get-ChildItem -Path "packages/desktop/src-tauri/target/release/bundle/nsis" -Filter "*.exe" | Select-Object -First 1
-
-          AzureSignTool sign `
-            --azure-key-vault-url $env:AZURE_KEY_VAULT_URL `
-            --azure-key-vault-client-id $env:AZURE_CLIENT_ID `
-            --azure-key-vault-client-secret $env:AZURE_CLIENT_SECRET `
-            --azure-key-vault-certificate $env:AZURE_CERT_NAME `
-            --timestamp-rfc3161 "http://timestamp.digicert.com" `
-            --description "NoChat Desktop" `
-            $Installer.FullName
+      # Optional: Windows code signing with Azure Key Vault
+      # To enable, set AZURE_KEY_VAULT_URL, AZURE_CLIENT_ID, AZURE_CLIENT_SECRET, AZURE_CERT_NAME secrets
+      # - name: Install AzureSignTool
+      #   run: dotnet tool install --global AzureSignTool
+      # - name: Sign with Azure Key Vault
+      #   env:
+      #     AZURE_KEY_VAULT_URL: ${{ secrets.AZURE_KEY_VAULT_URL }}
+      #     AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      #     AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+      #     AZURE_CERT_NAME: ${{ secrets.AZURE_CERT_NAME }}
+      #   run: |
+      #     $Installer = Get-ChildItem -Path "packages/desktop/src-tauri/target/release/bundle/nsis" -Filter "*.exe" | Select-Object -First 1
+      #     AzureSignTool sign `
+      #       --azure-key-vault-url $env:AZURE_KEY_VAULT_URL `
+      #       --azure-key-vault-client-id $env:AZURE_CLIENT_ID `
+      #       --azure-key-vault-client-secret $env:AZURE_CLIENT_SECRET `
+      #       --azure-key-vault-certificate $env:AZURE_CERT_NAME `
+      #       --timestamp-rfc3161 "http://timestamp.digicert.com" `
+      #       --description "NoChat Desktop" `
+      #       $Installer.FullName
 
       - name: Sign for updater
         run: |
