@@ -25,7 +25,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { useAuth } from "@/hooks";
+import { useAuth, useDownload } from "@/hooks";
 import { api } from "@/lib/api";
 import { useAuthStore } from "@/stores";
 import {
@@ -175,23 +175,11 @@ export default function LandingPage() {
     { icon: Lock, text: "Zero-trust architecture" },
   ];
 
-  // Detect platform for download button
-  const [platform, setPlatform] = useState<"macos" | "windows" | "linux" | null>(null);
-  useEffect(() => {
-    if (typeof window !== "undefined") {
-      const userAgent = navigator.userAgent.toLowerCase();
-      if (userAgent.includes("mac")) {
-        setPlatform("macos");
-      } else if (userAgent.includes("win")) {
-        setPlatform("windows");
-      } else if (userAgent.includes("linux")) {
-        setPlatform("linux");
-      }
-    }
-  }, []);
-
+  // Get download info for direct downloads
+  const { platform, getDownloadUrl, getPlatformName, loading: downloadLoading } = useDownload();
   const PlatformIcon = platform === "macos" ? Apple : platform === "windows" ? Monitor : Download;
-  const platformName = platform === "macos" ? "macOS" : platform === "windows" ? "Windows" : "Linux";
+  const downloadUrl = getDownloadUrl();
+  const platformName = getPlatformName();
 
   return (
     <main className="min-h-screen min-h-dvh flex flex-col w-full max-w-full overflow-x-hidden">
@@ -225,11 +213,12 @@ export default function LandingPage() {
               variant="default"
               size="sm"
               className="gap-2 hidden sm:flex"
+              disabled={downloadLoading}
               asChild
             >
-              <a href="#download">
+              <a href={downloadUrl} download>
                 <PlatformIcon className="w-4 h-4" />
-                Download for {platformName}
+                {downloadLoading ? "Loading..." : `Download for ${platformName}`}
               </a>
             </Button>
             <Button
@@ -238,7 +227,7 @@ export default function LandingPage() {
               className="sm:hidden"
               asChild
             >
-              <a href="#download">
+              <a href={downloadUrl} download>
                 <Download className="w-4 h-4" />
               </a>
             </Button>
@@ -328,11 +317,12 @@ export default function LandingPage() {
           {/* Download CTA in Hero */}
           <div className="pt-4">
             <a
-              href="#download"
+              href={downloadUrl}
+              download
               className="inline-flex items-center gap-2 text-primary hover:text-primary/80 transition-colors text-sm font-medium group"
             >
               <Download className="w-4 h-4" />
-              <span>Download the desktop app for the best experience</span>
+              <span>Download for {platformName} for the best experience</span>
               <span className="group-hover:translate-x-1 transition-transform">→</span>
             </a>
           </div>

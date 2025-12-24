@@ -1,129 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Apple, Monitor, Download } from "lucide-react";
-
-// GitHub repository info
-const GITHUB_OWNER = "CatsMeow492";
-const GITHUB_REPO = "nochat.io";
-
-interface ReleaseAsset {
-  name: string;
-  browser_download_url: string;
-  size: number;
-}
-
-interface Release {
-  tag_name: string;
-  name: string;
-  assets: ReleaseAsset[];
-}
-
-interface DownloadInfo {
-  version: string;
-  macos?: { url: string; size: string };
-  windows?: { url: string; size: string };
-  linux?: { url: string; size: string };
-}
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return bytes + " B";
-  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
-  return (bytes / (1024 * 1024)).toFixed(1) + " MB";
-}
+import { useDownload } from "@/hooks";
 
 export function DownloadButtons() {
-  const [downloadInfo, setDownloadInfo] = useState<DownloadInfo | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(false);
-
-  useEffect(() => {
-    async function fetchLatestRelease() {
-      try {
-        const response = await fetch(
-          `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/releases?per_page=10`
-        );
-
-        if (!response.ok) {
-          throw new Error("Failed to fetch releases");
-        }
-
-        const releases: Release[] = await response.json();
-
-        // Find the latest desktop release (tag starts with desktop-v)
-        const desktopRelease = releases.find((r) =>
-          r.tag_name.startsWith("desktop-v")
-        );
-
-        if (!desktopRelease) {
-          setError(true);
-          setLoading(false);
-          return;
-        }
-
-        const version = desktopRelease.tag_name.replace("desktop-v", "");
-
-        // Find assets for each platform
-        const macosAsset = desktopRelease.assets.find(
-          (a) => a.name.includes("universal") && a.name.endsWith(".dmg")
-        );
-        const windowsAsset = desktopRelease.assets.find(
-          (a) => a.name.includes("x64-setup") && a.name.endsWith(".exe")
-        );
-        const linuxAsset = desktopRelease.assets.find((a) =>
-          a.name.endsWith(".AppImage")
-        );
-
-        setDownloadInfo({
-          version,
-          macos: macosAsset
-            ? {
-                url: macosAsset.browser_download_url,
-                size: formatBytes(macosAsset.size),
-              }
-            : undefined,
-          windows: windowsAsset
-            ? {
-                url: windowsAsset.browser_download_url,
-                size: formatBytes(windowsAsset.size),
-              }
-            : undefined,
-          linux: linuxAsset
-            ? {
-                url: linuxAsset.browser_download_url,
-                size: formatBytes(linuxAsset.size),
-              }
-            : undefined,
-        });
-        setLoading(false);
-      } catch (err) {
-        console.error("Failed to fetch releases:", err);
-        setError(true);
-        setLoading(false);
-      }
-    }
-
-    fetchLatestRelease();
-  }, []);
-
-  // Detect user's platform
-  const [platform, setPlatform] = useState<"macos" | "windows" | "linux" | null>(
-    null
-  );
-
-  useEffect(() => {
-    if (typeof window !== "undefined") {
-      const userAgent = navigator.userAgent.toLowerCase();
-      if (userAgent.includes("mac")) {
-        setPlatform("macos");
-      } else if (userAgent.includes("win")) {
-        setPlatform("windows");
-      } else if (userAgent.includes("linux")) {
-        setPlatform("linux");
-      }
-    }
-  }, []);
+  const { downloadInfo, loading, error, platform, releasesUrl } = useDownload();
 
   if (loading) {
     return (
@@ -141,11 +23,7 @@ export function DownloadButtons() {
     return (
       <div className="flex flex-col items-center gap-4">
         <Button size="lg" asChild className="gap-3 px-8 py-6 text-lg">
-          <a
-            href={`https://github.com/${GITHUB_OWNER}/${GITHUB_REPO}/releases/latest`}
-            target="_blank"
-            rel="noopener noreferrer"
-          >
+          <a href={releasesUrl} target="_blank" rel="noopener noreferrer">
             <Download className="w-5 h-5" />
             Download Desktop App
           </a>
