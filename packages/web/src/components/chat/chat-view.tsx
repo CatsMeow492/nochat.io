@@ -5,7 +5,6 @@ import { useRouter } from "next/navigation";
 import {
   Send,
   Lock,
-  AlertCircle,
   MoreVertical,
   Phone,
   Video,
@@ -14,8 +13,6 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { ScrollArea } from "@/components/ui/scroll-area";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -24,6 +21,8 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { VirtualizedMessageList, VirtualizedMessageListRef } from "./virtualized-message-list";
 import { useMessages, useConversations } from "@/hooks";
 import { useAuthStore, useChatStore } from "@/stores";
 import { cn } from "@/lib/utils";
@@ -50,7 +49,7 @@ export function ChatView({ conversationId }: ChatViewProps) {
   } = useMessages(conversationId);
 
   const [newMessage, setNewMessage] = useState("");
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messageListRef = useRef<VirtualizedMessageListRef>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   // Call handlers - navigate to meeting room using conversation ID as room ID
@@ -68,7 +67,7 @@ export function ChatView({ conversationId }: ChatViewProps) {
     if (window.confirm("Are you sure you want to delete this conversation? This action cannot be undone.")) {
       deleteConversation(conversationId, {
         onSuccess: () => {
-          router.push("/chat");
+          router.push("/");
         },
       });
     }
@@ -80,10 +79,11 @@ export function ChatView({ conversationId }: ChatViewProps) {
     return () => setCurrentRoom(null);
   }, [conversationId, setCurrentRoom]);
 
-  // Scroll to bottom on new messages
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+  // Scroll to bottom on new messages (handled by VirtualizedMessageList automatically)
+  // Keeping manual trigger available via ref for explicit scrolls
+  const scrollToBottom = useCallback(() => {
+    messageListRef.current?.scrollToBottom("smooth");
+  }, []);
 
   // Focus input on mount
   useEffect(() => {
@@ -199,8 +199,8 @@ export function ChatView({ conversationId }: ChatViewProps) {
         </div>
       </header>
 
-      {/* Messages Area */}
-      <ScrollArea className="flex-1 p-4 scrollbar-thin">
+      {/* Messages Area - Virtualized for performance */}
+      <div className="flex-1 overflow-hidden message-list">
         {isLoading || isCryptoLoading ? (
           <div className="flex flex-col items-center justify-center h-full gap-4">
             <div className="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin" />
@@ -211,7 +211,7 @@ export function ChatView({ conversationId }: ChatViewProps) {
             )}
           </div>
         ) : messages.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-full text-center">
+          <div className="flex flex-col items-center justify-center h-full text-center p-4">
             <div className="w-16 h-16 rounded-2xl bg-primary/10 flex items-center justify-center mb-4">
               <Lock className="w-8 h-8 text-primary" />
             </div>
@@ -222,84 +222,13 @@ export function ChatView({ conversationId }: ChatViewProps) {
             </p>
           </div>
         ) : (
-          <div className="space-y-4">
-            {messages.map((message: any, index: number) => {
-              const isOwn = message.senderId === user?.id;
-              const showAvatar =
-                !isOwn &&
-                (index === 0 || messages[index - 1]?.senderId !== message.senderId);
-
-              return (
-                <div
-                  key={message.id}
-                  className={cn(
-                    "flex gap-3",
-                    isOwn ? "flex-row-reverse" : "flex-row"
-                  )}
-                >
-                  {!isOwn && (
-                    <div className="w-8">
-                      {showAvatar && (
-                        <Avatar className="w-8 h-8">
-                          <AvatarFallback className="text-xs bg-secondary">
-                            {message.senderName?.[0]?.toUpperCase() || "U"}
-                          </AvatarFallback>
-                        </Avatar>
-                      )}
-                    </div>
-                  )}
-                  <div
-                    className={cn(
-                      "max-w-[70%] flex flex-col",
-                      isOwn ? "items-end" : "items-start"
-                    )}
-                  >
-                    <div
-                      className={cn(
-                        "px-4 py-2.5 rounded-2xl",
-                        isOwn
-                          ? "bg-primary text-primary-foreground rounded-br-md"
-                          : "bg-secondary rounded-bl-md",
-                        message.decryptionError && "bg-destructive/20"
-                      )}
-                    >
-                      {message.decryptionError ? (
-                        <div className="flex items-center gap-2 text-destructive">
-                          <AlertCircle className="w-4 h-4" />
-                          <span className="text-sm italic">
-                            Could not decrypt message
-                          </span>
-                        </div>
-                      ) : (
-                        <p className="text-sm whitespace-pre-wrap break-words">
-                          {message.content}
-                        </p>
-                      )}
-                    </div>
-                    <div
-                      className={cn(
-                        "flex items-center gap-1.5 mt-1 px-1",
-                        isOwn ? "flex-row-reverse" : "flex-row"
-                      )}
-                    >
-                      {message.encrypted && (
-                        <Lock className="w-3 h-3 text-green-500" />
-                      )}
-                      <span className="text-xs text-muted-foreground">
-                        {new Date(message.timestamp).toLocaleTimeString([], {
-                          hour: "2-digit",
-                          minute: "2-digit",
-                        })}
-                      </span>
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-            <div ref={messagesEndRef} />
-          </div>
+          <VirtualizedMessageList
+            ref={messageListRef}
+            messages={messages}
+            currentUserId={user?.id}
+          />
         )}
-      </ScrollArea>
+      </div>
 
       {/* Message Input */}
       <div className="p-4 border-t border-border bg-card/50 backdrop-blur-sm">

@@ -66,8 +66,31 @@ export {
   ED25519_SIGNATURE_SIZE,
 } from './pqc';
 
-// X3DH key exchange
+// X3DH key exchange (legacy)
 export { initiateX3DH, completeX3DH, createSessionFromX3DH, verifyIdentityFingerprint } from './x3dh';
+
+// PQXDH key exchange (quantum-resistant hybrid X25519 + Kyber-1024)
+export {
+  initPQXDH,
+  isPQXDHReady,
+  pqxdhInitiate,
+  pqxdhRespond,
+  createSessionFromPQXDH,
+  verifyPrekeyBundle,
+  isHybridBundle,
+  isLegacyP256Bundle,
+  convertApiBundle,
+  generateEphemeralKeyPair,
+  PQXDH_VERSION,
+} from './pqxdh';
+
+// Re-export PQXDH types
+export type {
+  PQXDHInitResult,
+  PQXDHResponseResult,
+  PQXDHEphemeralKeyPair,
+  PQXDHInitiatorData,
+} from './pqxdh';
 
 // Double Ratchet
 export {

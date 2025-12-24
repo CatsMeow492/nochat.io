@@ -401,13 +401,14 @@ export function useMessages(conversationId: string | null) {
 
   // Transform messages for display
   const messages = useMemo(() => {
+    // conversationId is guaranteed non-null when messages exist (query is enabled only when conversationId exists)
     return (data?.messages || []).map((m: any) => ({
       id: m.id,
       content: m.content,
       senderId: m.sender_id,
       senderName: m.sender_name || "Unknown",
       timestamp: m.created_at,
-      roomId: conversationId,
+      roomId: conversationId ?? "",
       encrypted: m.encrypted,
       decryptionError: m.decryptionError,
     }));

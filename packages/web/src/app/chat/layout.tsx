@@ -3,6 +3,7 @@
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/hooks";
+import { useAuthStore } from "@/stores";
 import { ChatSidebar } from "@/components/chat/sidebar";
 import { OfflineBanner } from "@/components/offline-banner";
 
@@ -12,19 +13,36 @@ export default function ChatLayout({
   children: React.ReactNode;
 }) {
   const router = useRouter();
-  const { isAuthVerified, isLoading, token } = useAuth();
+  const { isAuthVerified, isLoading } = useAuth();
+  // For desktop app, trust Zustand's isAuthenticated directly
+  // because Rust already validated the token via API in handle_oauth_callback
+  const { isAuthenticated, token, _hasHydrated } = useAuthStore();
+
+  // Check if we're in Tauri desktop app
+  const isTauri = typeof window !== 'undefined' &&
+    (!!(window as any).__TAURI_INTERNALS__ || !!(window as any).__TAURI__);
+
+  // For desktop: trust isAuthenticated after hydration (Rust validated token)
+  // For web: require isAuthVerified (API call verification)
+  const isAuthorized = isTauri
+    ? (_hasHydrated && isAuthenticated && !!token)
+    : isAuthVerified;
+
+  const isCheckingAuth = isTauri
+    ? !_hasHydrated
+    : isLoading;
 
   useEffect(() => {
     // Redirect to home if:
-    // 1. No token at all (not authenticated)
-    // 2. Auth check completed and failed (token was invalid)
-    if (!isLoading && !isAuthVerified) {
+    // 1. Not checking auth anymore AND
+    // 2. Not authorized
+    if (!isCheckingAuth && !isAuthorized) {
       router.push("/");
     }
-  }, [isAuthVerified, isLoading, router]);
+  }, [isAuthorized, isCheckingAuth, router]);
 
   // Show loading while checking auth
-  if (isLoading) {
+  if (isCheckingAuth) {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <div className="flex flex-col items-center gap-4">
@@ -35,8 +53,8 @@ export default function ChatLayout({
     );
   }
 
-  // If not verified (redirect will happen via useEffect)
-  if (!isAuthVerified) {
+  // If not authorized (redirect will happen via useEffect)
+  if (!isAuthorized) {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <div className="flex flex-col items-center gap-4">

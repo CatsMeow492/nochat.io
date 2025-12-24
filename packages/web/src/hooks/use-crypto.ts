@@ -140,9 +140,19 @@ export function useCrypto() {
     }
   }, [isAuthenticated]);
 
+  // Determine if crypto is still in the process of initializing
+  // This includes: uninitialized (about to start), initializing, ready (before encrypted)
+  const isCryptoLoading =
+    (isAuthenticated && user?.id && token) &&
+    (status === "uninitialized" || status === "initializing" || status === "ready");
+
   return {
     status,
     isReady: isReady || status === "encrypted",
     isInitializing: status === "initializing" || status === "ready",
+    // True if crypto should be loading but hasn't reached "encrypted" yet
+    isLoading: isCryptoLoading,
+    // True if crypto initialization has completed (either encrypted or error)
+    isInitialized: status === "encrypted" || status === "error",
   };
 }

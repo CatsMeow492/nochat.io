@@ -2,15 +2,31 @@
  * CryptoService - Main E2EE service for nochat.io
  *
  * SECURITY OVERVIEW:
- * This service implements end-to-end encryption using Web Crypto API primitives.
+ * This service implements end-to-end encryption with quantum resistance.
  * The server operates in a zero-trust model - it stores only opaque ciphertext
  * and cannot derive any session keys or decrypt messages.
  *
  * ALGORITHMS USED:
+ *
+ * Primary (PQXDH - Quantum Resistant):
+ * - X25519 ECDH: Classical key exchange (32-byte keys)
+ * - ML-KEM (Kyber-1024): Post-quantum key encapsulation (1568-byte keys)
+ * - HYBRID: Both algorithms combined for defense-in-depth
+ * - AES-256-GCM: Authenticated encryption with 12-byte random nonces
+ * - HKDF-SHA256: Key derivation from hybrid shared secrets
+ *
+ * Fallback (Legacy - Classical Only):
  * - P-256 ECDSA: Identity key signatures
  * - P-256 ECDH: Session key derivation via Diffie-Hellman
- * - AES-256-GCM: Authenticated encryption with 12-byte random nonces
- * - HKDF-SHA256: Key derivation from ECDH shared secrets
+ *
+ * PROTOCOL VERSIONS:
+ * - Version 1: P-256 ECDH only (classical, legacy peers)
+ * - Version 2: PQXDH hybrid (X25519 + Kyber-1024, quantum resistant)
+ *
+ * SECURITY GUARANTEE (PQXDH):
+ * Even if ML-KEM is broken, security falls back to X25519.
+ * Even if X25519 is broken by quantum computers, ML-KEM provides protection.
+ * Both must be broken simultaneously to compromise the key exchange.
  *
  * KEY STORAGE:
  * - Private keys: Stored in IndexedDB (browser-local, never sent to server)
@@ -21,13 +37,15 @@
  * - Forward secrecy: Per-session (each peer pair has unique key)
  * - Authentication: AES-GCM provides message integrity
  * - Zero-trust: Server cannot derive keys from public keys alone
+ * - Quantum resistance: Hybrid PQXDH protects against future quantum attacks
  *
  * KNOWN LIMITATIONS (see SECURITY.md):
  * - Same session key used for all messages with a peer (no per-message ratchet)
- * - P-256 is not quantum-resistant (PQC primitives prepared but not active)
  * - Keys accessible to any code in the browser origin
+ * - PQXDH requires @noble/post-quantum library support
  *
  * @see /docs/crypto-inventory.md for full cryptographic details
+ * @see https://signal.org/docs/specifications/pqxdh/ for PQXDH specification
  */
 
 import { openDB, IDBPDatabase } from 'idb';
@@ -44,6 +62,23 @@ import {
   decryptSealedGroupMessage,
   deserializeSealedEnvelope,
 } from './sealed-sender';
+import {
+  initPQXDH,
+  isPQXDHReady,
+  pqxdhInitiate,
+  isHybridBundle,
+  isLegacyP256Bundle,
+  convertApiBundle,
+  PQXDH_VERSION,
+} from './pqxdh';
+import {
+  generateHybridKeyPair,
+  generateX25519KeyPair,
+  x25519DH,
+  initPQC,
+  isPQCReady,
+} from './pqc';
+import type { HybridKeyPair, HybridPreKeyBundle } from './types';
 import type {
   InnerEnvelope as SealedInnerEnvelope,
   WSSealedMessage,
@@ -77,6 +112,12 @@ interface StoredKeys {
   signaturePrivateKey: string; // Base64 JWK
   registrationId: number;
   createdAt: number;
+  // Hybrid PQXDH keys (X25519 + Kyber-1024)
+  hybridECPublicKey?: string; // Base64 X25519 (32 bytes)
+  hybridECPrivateKey?: string; // Base64 X25519 (32 bytes)
+  hybridPQPublicKey?: string; // Base64 Kyber-1024 (1568 bytes)
+  hybridPQPrivateKey?: string; // Base64 Kyber-1024 (3168 bytes)
+  protocolVersion?: number; // 1 = P-256 only, 2 = PQXDH hybrid
 }
 
 interface PeerSessionData {
@@ -130,7 +171,7 @@ export class CryptoService {
   private initialized = false;
   private initPromise: Promise<void> | null = null;
 
-  // Cached key material
+  // Cached key material (P-256 for backwards compatibility)
   private identityPublicKey: Uint8Array | null = null;
   private identityPrivateKeyJwk: JsonWebKey | null = null;
   private exchangePublicKey: Uint8Array | null = null;
@@ -138,6 +179,14 @@ export class CryptoService {
   private signaturePublicKey: Uint8Array | null = null;
   private signaturePrivateKeyJwk: JsonWebKey | null = null;
   private registrationId: number = 0;
+
+  // Hybrid PQXDH keys (X25519 + Kyber-1024)
+  private hybridECPublicKey: Uint8Array | null = null;
+  private hybridECPrivateKey: Uint8Array | null = null;
+  private hybridPQPublicKey: Uint8Array | null = null;
+  private hybridPQPrivateKey: Uint8Array | null = null;
+  private protocolVersion: number = 1; // 1 = P-256 only, 2 = PQXDH hybrid
+  private pqxdhReady: boolean = false;
 
   // Peer session key cache (peerId -> session key)
   private peerSessionKeys: Map<string, Uint8Array> = new Map();
@@ -222,6 +271,16 @@ export class CryptoService {
     }
 
     try {
+      // Initialize PQXDH module (non-blocking, may fail on older browsers)
+      try {
+        await initPQXDH();
+        this.pqxdhReady = true;
+        console.log('[CryptoService] PQXDH module initialized (quantum-resistant)');
+      } catch (error) {
+        console.warn('[CryptoService] PQXDH initialization failed, using P-256 fallback:', error);
+        this.pqxdhReady = false;
+      }
+
       // Open IndexedDB
       this.db = await openDB(DB_NAME, DB_VERSION, {
         upgrade(db, oldVersion, newVersion) {
@@ -254,6 +313,13 @@ export class CryptoService {
       const stored = await this.loadKeys();
       if (stored) {
         console.log('[CryptoService] Loaded existing keys from IndexedDB');
+        // Upgrade to PQXDH if ready but user doesn't have hybrid keys yet
+        if (this.pqxdhReady && !this.hybridECPublicKey) {
+          console.log('[CryptoService] Upgrading to PQXDH hybrid keys...');
+          await this.generateHybridKeys();
+          await this.saveKeys();
+          console.log('[CryptoService] PQXDH hybrid keys generated');
+        }
       } else {
         console.log('[CryptoService] Generating new keys...');
         await this.generateKeys();
@@ -309,18 +375,48 @@ export class CryptoService {
   }
 
   /**
-   * Get keys for server upload
+   * Get keys for server upload (supports both legacy and PQXDH)
    */
   async getKeysForUpload(): Promise<{
     identityPublicKey: string;
-    signedPreKey: { keyId: number; publicKey: string; signature: string };
+    signedPreKey: {
+      keyId: number;
+      publicKey: string;
+      ecPublicKey?: string; // X25519 for PQXDH
+      pqPublicKey?: string; // Kyber-1024 for PQXDH
+      signature: string;
+    };
     oneTimePreKeys: Array<{ keyId: number; publicKey: string }>;
+    bundleVersion: number;
   } | null> {
     if (!this.exchangePublicKey || !this.signaturePrivateKeyJwk) return null;
 
     // Sign the exchange public key with our signature key
     const signature = await this.signData(this.exchangePublicKey);
 
+    // Check if we have PQXDH hybrid keys
+    const hasHybridKeys = this.hybridECPublicKey && this.hybridPQPublicKey;
+
+    if (hasHybridKeys) {
+      // Sign the combined hybrid keys
+      const combinedHybridKey = concat(this.hybridECPublicKey!, this.hybridPQPublicKey!);
+      const hybridSignature = await this.signData(combinedHybridKey);
+
+      return {
+        identityPublicKey: toBase64(this.identityPublicKey!),
+        signedPreKey: {
+          keyId: 1,
+          publicKey: toBase64(this.exchangePublicKey), // Legacy P-256 for backwards compat
+          ecPublicKey: toBase64(this.hybridECPublicKey!), // X25519
+          pqPublicKey: toBase64(this.hybridPQPublicKey!), // Kyber-1024
+          signature: toBase64(hybridSignature),
+        },
+        oneTimePreKeys: [],
+        bundleVersion: PQXDH_VERSION,
+      };
+    }
+
+    // Legacy P-256 only
     return {
       identityPublicKey: toBase64(this.identityPublicKey!),
       signedPreKey: {
@@ -328,7 +424,35 @@ export class CryptoService {
         publicKey: toBase64(this.exchangePublicKey),
         signature: toBase64(signature),
       },
-      oneTimePreKeys: [], // For now, we don't use one-time prekeys
+      oneTimePreKeys: [],
+      bundleVersion: 1,
+    };
+  }
+
+  /**
+   * Check if PQXDH (quantum-resistant) encryption is available
+   */
+  isPQXDHEnabled(): boolean {
+    return this.pqxdhReady && !!this.hybridECPublicKey && !!this.hybridPQPublicKey;
+  }
+
+  /**
+   * Get the current protocol version
+   * 1 = P-256 ECDH only (classical)
+   * 2 = PQXDH hybrid (X25519 + Kyber-1024)
+   */
+  getProtocolVersion(): number {
+    return this.protocolVersion;
+  }
+
+  /**
+   * Get hybrid public keys for display/verification
+   */
+  getHybridPublicKeys(): { ecPublicKey: string; pqPublicKey: string } | null {
+    if (!this.hybridECPublicKey || !this.hybridPQPublicKey) return null;
+    return {
+      ecPublicKey: toBase64(this.hybridECPublicKey),
+      pqPublicKey: toBase64(this.hybridPQPublicKey),
     };
   }
 
@@ -437,8 +561,9 @@ export class CryptoService {
   }
 
   /**
-   * Derive a session key with a peer via ECDH, optionally using a pre-fetched bundle.
-   * This avoids redundant API calls when the bundle was already fetched.
+   * Derive a session key with a peer via ECDH or PQXDH.
+   * Uses PQXDH (hybrid X25519 + Kyber) when available for quantum resistance.
+   * Falls back to P-256 ECDH for legacy peers.
    */
   private async derivePeerSessionKeyWithBundle(
     peerId: string,
@@ -450,25 +575,140 @@ export class CryptoService {
 
     console.log('[CryptoService] Deriving session key for peer:', peerId);
     console.log('[CryptoService] My user ID:', this.userId);
+    console.log('[CryptoService] PQXDH ready:', this.pqxdhReady);
+    console.log('[CryptoService] Have hybrid keys:', !!this.hybridECPrivateKey);
 
-    // Use preloaded bundle or fetch a new one
-    let peerPublicKeyRaw: Uint8Array;
-    let peerKeyFingerprint: string;
+    // Fetch peer's prekey bundle
+    let bundle: Awaited<ReturnType<typeof api.getPreKeyBundle>>;
     try {
-      const bundle = preloadedBundle || await api.getPreKeyBundle(peerId);
-      peerPublicKeyRaw = fromBase64(bundle.signed_prekey.kyber_public_key);
-      peerKeyFingerprint = (bundle.identity_key as any)?.key_fingerprint || (bundle.identity_key as any)?.fingerprint || '';
-      console.log('[CryptoService] Fetched peer prekey bundle, key length:', peerPublicKeyRaw.length);
-      console.log('[CryptoService] Peer public key (hex):', toHex(peerPublicKeyRaw));
-
-      // Verify key in transparency log (non-blocking)
-      if (peerKeyFingerprint) {
-        this.verifyPeerKeyTransparency(peerId, peerKeyFingerprint);
-      }
+      bundle = preloadedBundle || await api.getPreKeyBundle(peerId);
+      console.log('[CryptoService] Fetched peer prekey bundle');
     } catch (error) {
       console.error('[CryptoService] Failed to fetch peer prekey bundle:', error);
       throw new Error(`Failed to fetch encryption keys for peer: ${peerId}`);
     }
+
+    // Get peer's fingerprint for transparency verification
+    const peerKeyFingerprint = (bundle.identity_key as any)?.key_fingerprint ||
+                               (bundle.identity_key as any)?.fingerprint || '';
+    if (peerKeyFingerprint) {
+      this.verifyPeerKeyTransparency(peerId, peerKeyFingerprint);
+    }
+
+    // Determine if we should use PQXDH (hybrid) or legacy P-256 ECDH
+    const bundleHasECKey = !!(bundle.signed_prekey as any)?.ec_public_key;
+    const bundleVersion = (bundle as any).bundle_version || (bundleHasECKey ? 2 : 1);
+    const usePQXDH = this.pqxdhReady &&
+                     this.hybridECPrivateKey &&
+                     bundleVersion >= 2 &&
+                     bundleHasECKey;
+
+    let sessionKey: Uint8Array;
+    let peerPublicKeyForStorage: string;
+
+    if (usePQXDH) {
+      // Use PQXDH (hybrid X25519 + Kyber-1024) for quantum resistance
+      console.log('[CryptoService] Using PQXDH (quantum-resistant) session derivation');
+      const result = await this.derivePQXDHSession(peerId, bundle);
+      sessionKey = result.sessionKey;
+      peerPublicKeyForStorage = result.peerPublicKeyForStorage;
+    } else {
+      // Fall back to legacy P-256 ECDH
+      console.log('[CryptoService] Using legacy P-256 ECDH session derivation');
+      const result = await this.deriveLegacySession(peerId, bundle);
+      sessionKey = result.sessionKey;
+      peerPublicKeyForStorage = result.peerPublicKeyForStorage;
+    }
+
+    // Cache in memory
+    this.peerSessionKeys.set(peerId, sessionKey);
+
+    // Persist to IndexedDB
+    if (this.db) {
+      try {
+        const sessionData: PeerSessionData = {
+          peerId,
+          peerPublicKey: peerPublicKeyForStorage,
+          sharedSecret: '', // Not stored for PQXDH (derived from KDF)
+          sessionKey: toBase64(sessionKey),
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        };
+        await this.db.put(STORE_PEER_SESSIONS, sessionData);
+        console.log('[CryptoService] Persisted peer session to IndexedDB:', peerId);
+      } catch (error) {
+        console.warn('[CryptoService] Failed to persist session to IndexedDB:', error);
+      }
+    }
+
+    return sessionKey;
+  }
+
+  /**
+   * Derive session using PQXDH (hybrid X25519 + Kyber-1024)
+   * Provides quantum resistance via post-quantum KEM
+   */
+  private async derivePQXDHSession(
+    peerId: string,
+    bundle: Awaited<ReturnType<typeof api.getPreKeyBundle>>
+  ): Promise<{ sessionKey: Uint8Array; peerPublicKeyForStorage: string }> {
+    // Convert API bundle to HybridPreKeyBundle format
+    const hybridBundle = convertApiBundle({
+      user_id: bundle.user_id,
+      identity_key: bundle.identity_key,
+      signed_prekey: bundle.signed_prekey as any,
+      one_time_prekey: (bundle as any).one_time_prekey,
+      bundle_version: (bundle as any).bundle_version,
+    });
+
+    console.log('[CryptoService] Converted to hybrid bundle, version:', hybridBundle.bundleVersion);
+    console.log('[CryptoService] Signed prekey EC length:', hybridBundle.signedPreKeyEC.length);
+    console.log('[CryptoService] Signed prekey PQ length:', hybridBundle.signedPreKeyPQ.length);
+
+    // Prepare initiator data for PQXDH
+    const initiatorData = {
+      identityKeyPair: {
+        signingKey: new Uint8Array(32), // Ed25519 placeholder (we use P-256 for legacy compat)
+        exchangeKey: this.hybridECPrivateKey!,
+        publicKey: this.signaturePublicKey!,
+        exchangePublic: this.hybridECPublicKey!,
+      },
+    };
+
+    // Perform PQXDH key exchange
+    const pqxdhResult = await pqxdhInitiate(initiatorData, hybridBundle);
+    console.log('[CryptoService] PQXDH shared secret derived (hex):', toHex(pqxdhResult.sharedSecret));
+
+    // Derive final session key using HKDF with user IDs
+    const sortedIds = [this.userId!, peerId].sort();
+    const encoder = new TextEncoder();
+    const saltString = `nochat-pqxdh-session-${sortedIds[0]}-${sortedIds[1]}`;
+    const salt = await sha256(encoder.encode(saltString));
+    const info = encoder.encode('nochat-e2ee-pqxdh-v1');
+
+    const sessionKey = await hkdfDerive(pqxdhResult.sharedSecret, salt, info, 32);
+    console.log('[CryptoService] PQXDH session key (hex):', toHex(sessionKey));
+
+    // Store the hybrid public keys for session validation
+    const peerPublicKeyForStorage = toBase64(concat(
+      hybridBundle.signedPreKeyEC,
+      hybridBundle.signedPreKeyPQ
+    ));
+
+    return { sessionKey, peerPublicKeyForStorage };
+  }
+
+  /**
+   * Derive session using legacy P-256 ECDH
+   * Used for backwards compatibility with peers that don't support PQXDH
+   */
+  private async deriveLegacySession(
+    peerId: string,
+    bundle: Awaited<ReturnType<typeof api.getPreKeyBundle>>
+  ): Promise<{ sessionKey: Uint8Array; peerPublicKeyForStorage: string }> {
+    const peerPublicKeyRaw = fromBase64(bundle.signed_prekey.kyber_public_key);
+    console.log('[CryptoService] Legacy P-256 peer public key length:', peerPublicKeyRaw.length);
+    console.log('[CryptoService] Peer public key (hex):', toHex(peerPublicKeyRaw));
 
     // Import peer's public key for ECDH
     const peerKeyBuffer = new ArrayBuffer(peerPublicKeyRaw.length);
@@ -485,7 +725,7 @@ export class CryptoService {
     // Import our private key for ECDH
     const ourPrivateKey = await crypto.subtle.importKey(
       'jwk',
-      this.exchangePrivateKeyJwk,
+      this.exchangePrivateKeyJwk!,
       { name: 'ECDH', namedCurve: 'P-256' },
       false,
       ['deriveBits']
@@ -493,7 +733,7 @@ export class CryptoService {
 
     // Log our public key for comparison
     if (this.exchangePublicKey) {
-      console.log('[CryptoService] My public key (hex):', toHex(this.exchangePublicKey));
+      console.log('[CryptoService] My P-256 public key (hex):', toHex(this.exchangePublicKey));
     }
 
     // Perform ECDH to get shared secret
@@ -503,43 +743,22 @@ export class CryptoService {
       256 // 32 bytes
     );
     const sharedSecret = new Uint8Array(sharedSecretBits);
-    console.log('[CryptoService] ECDH shared secret (hex):', toHex(sharedSecret));
+    console.log('[CryptoService] P-256 ECDH shared secret (hex):', toHex(sharedSecret));
 
     // Derive session key using HKDF
     const sortedIds = [this.userId!, peerId].sort();
-    console.log('[CryptoService] Sorted user IDs:', sortedIds);
     const encoder = new TextEncoder();
     const saltString = `nochat-session-${sortedIds[0]}-${sortedIds[1]}`;
-    console.log('[CryptoService] Salt string:', saltString);
     const salt = await sha256(encoder.encode(saltString));
-    console.log('[CryptoService] Salt (hex):', toHex(salt));
     const info = encoder.encode('nochat-e2ee-v2');
 
     const sessionKey = await hkdfDerive(sharedSecret, salt, info, 32);
-    console.log('[CryptoService] Session key (hex):', toHex(sessionKey));
+    console.log('[CryptoService] Legacy session key (hex):', toHex(sessionKey));
 
-    // Cache in memory
-    this.peerSessionKeys.set(peerId, sessionKey);
-
-    // Persist to IndexedDB
-    if (this.db) {
-      try {
-        const sessionData: PeerSessionData = {
-          peerId,
-          peerPublicKey: toBase64(peerPublicKeyRaw),
-          sharedSecret: toBase64(sharedSecret),
-          sessionKey: toBase64(sessionKey),
-          createdAt: Date.now(),
-          updatedAt: Date.now(),
-        };
-        await this.db.put(STORE_PEER_SESSIONS, sessionData);
-        console.log('[CryptoService] Persisted peer session to IndexedDB:', peerId);
-      } catch (error) {
-        console.warn('[CryptoService] Failed to persist session to IndexedDB:', error);
-      }
-    }
-
-    return sessionKey;
+    return {
+      sessionKey,
+      peerPublicKeyForStorage: toBase64(peerPublicKeyRaw),
+    };
   }
 
   /**
@@ -1297,8 +1516,40 @@ export class CryptoService {
 
     this.registrationId = Math.floor(Math.random() * 16380) + 1;
 
+    // Generate PQXDH hybrid keys if available
+    if (this.pqxdhReady) {
+      await this.generateHybridKeys();
+    }
+
     // Save to IndexedDB
     await this.saveKeys();
+  }
+
+  /**
+   * Generate hybrid PQXDH keys (X25519 + Kyber-1024)
+   * Called during initialization when PQXDH is available
+   */
+  private async generateHybridKeys(): Promise<void> {
+    if (!this.pqxdhReady) {
+      console.warn('[CryptoService] Cannot generate hybrid keys - PQXDH not ready');
+      return;
+    }
+
+    try {
+      const hybridKeyPair = await generateHybridKeyPair();
+      this.hybridECPublicKey = hybridKeyPair.ecPublicKey;
+      this.hybridECPrivateKey = hybridKeyPair.ecPrivateKey;
+      this.hybridPQPublicKey = hybridKeyPair.pqPublicKey;
+      this.hybridPQPrivateKey = hybridKeyPair.pqPrivateKey;
+      this.protocolVersion = PQXDH_VERSION;
+
+      console.log('[CryptoService] Generated hybrid PQXDH keys');
+      console.log('[CryptoService] X25519 public key length:', this.hybridECPublicKey.length);
+      console.log('[CryptoService] Kyber-1024 public key length:', this.hybridPQPublicKey.length);
+    } catch (error) {
+      console.error('[CryptoService] Failed to generate hybrid keys:', error);
+      throw error;
+    }
   }
 
   private async loadKeys(): Promise<boolean> {
@@ -1315,6 +1566,17 @@ export class CryptoService {
       this.signaturePublicKey = fromBase64(stored.signaturePublicKey);
       this.signaturePrivateKeyJwk = JSON.parse(stored.signaturePrivateKey);
       this.registrationId = stored.registrationId;
+
+      // Load hybrid PQXDH keys if available
+      if (stored.hybridECPublicKey && stored.hybridPQPublicKey) {
+        this.hybridECPublicKey = fromBase64(stored.hybridECPublicKey);
+        this.hybridECPrivateKey = fromBase64(stored.hybridECPrivateKey!);
+        this.hybridPQPublicKey = fromBase64(stored.hybridPQPublicKey);
+        this.hybridPQPrivateKey = fromBase64(stored.hybridPQPrivateKey!);
+        this.protocolVersion = stored.protocolVersion || PQXDH_VERSION;
+        console.log('[CryptoService] Loaded hybrid PQXDH keys from IndexedDB');
+      }
+
       return true;
     } catch (error) {
       console.error('[CryptoService] Failed to parse stored keys:', error);
@@ -1335,6 +1597,12 @@ export class CryptoService {
       signaturePrivateKey: JSON.stringify(this.signaturePrivateKeyJwk),
       registrationId: this.registrationId,
       createdAt: Date.now(),
+      // Hybrid PQXDH keys
+      hybridECPublicKey: this.hybridECPublicKey ? toBase64(this.hybridECPublicKey) : undefined,
+      hybridECPrivateKey: this.hybridECPrivateKey ? toBase64(this.hybridECPrivateKey) : undefined,
+      hybridPQPublicKey: this.hybridPQPublicKey ? toBase64(this.hybridPQPublicKey) : undefined,
+      hybridPQPrivateKey: this.hybridPQPrivateKey ? toBase64(this.hybridPQPrivateKey) : undefined,
+      protocolVersion: this.protocolVersion,
     };
 
     await this.db.put(STORE_KEYS, stored);
@@ -1383,6 +1651,12 @@ export class CryptoService {
     this.exchangePrivateKeyJwk = null;
     this.signaturePublicKey = null;
     this.signaturePrivateKeyJwk = null;
+    // Clear hybrid PQXDH keys
+    this.hybridECPublicKey = null;
+    this.hybridECPrivateKey = null;
+    this.hybridPQPublicKey = null;
+    this.hybridPQPrivateKey = null;
+    this.protocolVersion = 1;
     this.conversationKeys.clear();
     this.peerSessionKeys.clear();
     this.pendingKeyFetches.clear();
@@ -1428,12 +1702,21 @@ export class CryptoService {
         console.warn('[CryptoService] Failed to clear delivery tokens:', error);
       }
     }
+    // Clear P-256 keys
     this.identityPublicKey = null;
     this.identityPrivateKeyJwk = null;
     this.exchangePublicKey = null;
     this.exchangePrivateKeyJwk = null;
     this.signaturePublicKey = null;
     this.signaturePrivateKeyJwk = null;
+    // Clear hybrid PQXDH keys
+    this.hybridECPublicKey = null;
+    this.hybridECPrivateKey = null;
+    this.hybridPQPublicKey = null;
+    this.hybridPQPrivateKey = null;
+    this.protocolVersion = 1;
+    this.pqxdhReady = false;
+    // Clear caches
     this.conversationKeys.clear();
     this.peerSessionKeys.clear();
     this.pendingKeyFetches.clear();

@@ -15,12 +15,14 @@ interface AuthState {
   token: string | null;
   isAuthenticated: boolean;
   isLoading: boolean;
+  _hasHydrated: boolean; // Track if store has hydrated from localStorage
 
   // Actions
   setUser: (user: User, token: string) => void;
   logout: () => void;
   clearAuth: () => void; // Clear auth without side effects (for invalid sessions)
   setLoading: (loading: boolean) => void;
+  setHasHydrated: (state: boolean) => void;
 }
 
 export const useAuthStore = create<AuthState>()(
@@ -30,6 +32,7 @@ export const useAuthStore = create<AuthState>()(
       token: null,
       isAuthenticated: false,
       isLoading: true,
+      _hasHydrated: false,
 
       setUser: (user, token) =>
         set({
@@ -56,6 +59,7 @@ export const useAuthStore = create<AuthState>()(
         }),
 
       setLoading: (loading) => set({ isLoading: loading }),
+      setHasHydrated: (state) => set({ _hasHydrated: state }),
     }),
     {
       name: "nochat-auth",
@@ -65,6 +69,10 @@ export const useAuthStore = create<AuthState>()(
         token: state.token,
         isAuthenticated: state.isAuthenticated,
       }),
+      onRehydrateStorage: () => (state) => {
+        // Called when hydration is complete
+        state?.setHasHydrated(true);
+      },
     }
   )
 );

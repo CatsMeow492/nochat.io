@@ -21,7 +21,6 @@ import {
   Copy,
   Check,
   Link2,
-  Sparkles,
 } from "lucide-react";
 import { useMeeting } from "@/hooks/use-meeting";
 import { useAuth } from "@/hooks";
@@ -262,10 +261,13 @@ function LocalVideoPiP({
   );
 }
 
-export default function MeetingPage() {
+export default function MeetingClient() {
   const params = useParams();
   const router = useRouter();
-  const roomId = params.roomId as string;
+  // Handle optional catch-all route - roomId can be undefined, string, or string[]
+  const roomIdParam = params.roomId;
+  const roomId = Array.isArray(roomIdParam) ? roomIdParam[0] : roomIdParam;
+
   const { user, isLoading: isAuthLoading } = useAuth();
   const { setUser } = useAuthStore();
   const [copied, setCopied] = useState(false);
@@ -283,23 +285,25 @@ export default function MeetingPage() {
     disconnect,
     toggleMute,
     toggleVideo,
-  } = useMeeting(roomId);
+  } = useMeeting(roomId || "");
 
   // Apply video effects to local stream
   const processedLocalStream = useVideoEffects(localStream, backgroundEffect);
 
   // Generate shareable link
-  const meetingLink = typeof window !== "undefined"
+  const meetingLink = typeof window !== "undefined" && roomId
     ? `${window.location.origin}/meeting/${roomId}`
     : "";
 
   const copyLink = async () => {
+    if (!meetingLink) return;
     await navigator.clipboard.writeText(meetingLink);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
 
   const handleJoin = async () => {
+    if (!roomId) return;
     setIsJoining(true);
     try {
       let userId = user?.id;
@@ -342,6 +346,25 @@ export default function MeetingPage() {
       <div className="min-h-screen flex items-center justify-center">
         <div className="w-8 h-8 border-4 border-primary border-t-transparent rounded-full animate-spin" />
       </div>
+    );
+  }
+
+  // No room ID - redirect to home or show error
+  if (!roomId) {
+    return (
+      <TooltipProvider>
+        <main className="min-h-screen flex flex-col items-center justify-center p-4 sm:p-6">
+          <div className="w-full max-w-md text-center space-y-6">
+            <h1 className="text-2xl font-bold">No Meeting ID</h1>
+            <p className="text-muted-foreground">
+              Please use a valid meeting link or create a new meeting from the home page.
+            </p>
+            <Button onClick={() => router.push("/")}>
+              Go to Home
+            </Button>
+          </div>
+        </main>
+      </TooltipProvider>
     );
   }
 

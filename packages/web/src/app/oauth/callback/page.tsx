@@ -52,9 +52,9 @@ function OAuthCallbackContent() {
           setUser(user, token);
           setStatus("success");
 
-          // Redirect to chat after a brief success message
+          // Redirect to home after a brief success message
           setTimeout(() => {
-            router.push("/chat");
+            router.push("/");
           }, 1000);
         } else {
           throw new Error("Invalid user data received");

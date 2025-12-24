@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Eye, EyeOff, Lock, Mail, ArrowLeft, Loader2 } from "lucide-react";
@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { useAuth } from "@/hooks";
+import { useAuthStore } from "@/stores";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080";
 
@@ -42,19 +43,125 @@ function AppleIcon({ className }: { className?: string }) {
 export default function SignInPage() {
   const router = useRouter();
   const { signIn, isSigningIn, signInError, signInAnonymous, isSigningInAnonymous } = useAuth();
+  const { setUser } = useAuthStore();
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
+  const [oauthLoading, setOauthLoading] = useState<string | null>(null);
+  const [oauthError, setOauthError] = useState<string | null>(null);
+  const [isDesktop, setIsDesktop] = useState(false);
+
+  // Detect Tauri desktop app after hydration
+  // In Tauri v2, __TAURI_INTERNALS__ is always present
+  useEffect(() => {
+    const isTauri = !!(window as any).__TAURI_INTERNALS__ || !!(window as any).__TAURI__;
+    setIsDesktop(isTauri);
+    if (isTauri) {
+      console.log("Running in Tauri desktop app");
+    }
+  }, []);
+
+  // Listen for OAuth callbacks from Tauri deep links
+  useEffect(() => {
+    if (!isDesktop) return;
+
+    let unlisten: (() => void) | undefined;
+
+    const setupListener = async () => {
+      try {
+        const { listen } = await import("@tauri-apps/api/event");
+        unlisten = await listen<string>("oauth-callback", async (event) => {
+          const url = event.payload;
+          console.log("Received OAuth callback:", url);
+
+          // Parse the URL to get token or error
+          const urlObj = new URL(url);
+          const token = urlObj.searchParams.get("token");
+          const error = urlObj.searchParams.get("error");
+
+          if (error) {
+            setOauthError(decodeURIComponent(error));
+            setOauthLoading(null);
+            return;
+          }
+
+          if (token) {
+            try {
+              const { invoke } = await import("@tauri-apps/api/core");
+              const response = await invoke<{
+                success: boolean;
+                user?: any;
+                token?: string;
+                error?: string;
+              }>("handle_oauth_callback", { token });
+
+              console.log("OAuth response:", response);
+              if (response.success && response.user) {
+                // Update auth store
+                // Note: Tauri uses camelCase for JSON serialization
+                setUser(
+                  {
+                    id: response.user.id,
+                    username: response.user.username,
+                    email: response.user.email,
+                    isAnonymous: response.user.isAnonymous ?? false,
+                    walletAddress: response.user.walletAddress,
+                    createdAt: response.user.createdAt,
+                  },
+                  response.token!
+                );
+                localStorage.setItem("token", response.token!);
+                console.log("User authenticated, redirecting to /");
+                router.push("/");
+              } else {
+                console.log("OAuth failed:", response.error);
+                setOauthError(response.error || "Failed to sign in");
+              }
+            } catch (err) {
+              console.error("OAuth callback error:", err);
+              setOauthError("Failed to complete sign in");
+            }
+          }
+
+          setOauthLoading(null);
+        });
+      } catch (err) {
+        console.error("Failed to set up OAuth listener:", err);
+      }
+    };
+
+    setupListener();
+
+    return () => {
+      if (unlisten) unlisten();
+    };
+  }, [isDesktop, router, setUser]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     signIn({ email, password });
   };
 
-  const handleOAuthSignIn = (provider: "google" | "github" | "apple") => {
-    // Redirect to backend OAuth endpoint
-    window.location.href = `${API_URL}/api/auth/oauth/${provider}`;
+  const handleOAuthSignIn = async (provider: "google" | "github" | "apple") => {
+    setOauthError(null);
+
+    if (isDesktop) {
+      // Use Tauri command for desktop OAuth
+      setOauthLoading(provider);
+      try {
+        const { invoke } = await import("@tauri-apps/api/core");
+        await invoke("start_oauth", { provider });
+        // The result will come via the deep link callback
+      } catch (err) {
+        console.error("Failed to start OAuth:", err);
+        setOauthError("Failed to start sign in");
+        setOauthLoading(null);
+      }
+    } else {
+      // Redirect to backend OAuth endpoint for web
+      window.location.href = `${API_URL}/api/auth/oauth/${provider}`;
+    }
   };
 
   return (
@@ -74,163 +181,278 @@ export default function SignInPage() {
           <CardHeader className="text-center">
             <CardTitle className="text-2xl gradient-text">Welcome Back</CardTitle>
             <CardDescription>
-              Sign in to your NoChat account
+              {isDesktop ? "Sign in with your account" : "Sign in to your NoChat account"}
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <form onSubmit={handleSubmit} className="space-y-4">
-              {/* Email Field */}
-              <div className="space-y-2">
-                <label htmlFor="email" className="text-sm font-medium">
-                  Email
-                </label>
-                <div className="relative">
-                  <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-                  <Input
-                    id="email"
-                    type="email"
-                    placeholder="you@example.com"
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    className="pl-10"
-                    required
-                  />
-                </div>
-              </div>
+            {/* Desktop: OAuth-only UI */}
+            {isDesktop ? (
+              <div className="space-y-4">
+                {/* Error Message */}
+                {oauthError && (
+                  <p className="text-sm text-destructive text-center">
+                    {oauthError}
+                  </p>
+                )}
 
-              {/* Password Field */}
-              <div className="space-y-2">
-                <label htmlFor="password" className="text-sm font-medium">
-                  Password
-                </label>
-                <div className="relative">
-                  <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-                  <Input
-                    id="password"
-                    type={showPassword ? "text" : "password"}
-                    placeholder="Your password"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    className="pl-10 pr-10"
-                    required
-                  />
-                  <button
+                {/* OAuth Buttons - Vertical Stack for Desktop */}
+                <div className="space-y-3">
+                  <Button
                     type="button"
-                    onClick={() => setShowPassword(!showPassword)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                    variant="outline"
+                    className="w-full justify-start gap-3 h-12"
+                    onClick={() => handleOAuthSignIn("google")}
+                    disabled={!!oauthLoading}
                   >
-                    {showPassword ? (
-                      <EyeOff className="w-4 h-4" />
+                    {oauthLoading === "google" ? (
+                      <Loader2 className="w-5 h-5 animate-spin" />
                     ) : (
-                      <Eye className="w-4 h-4" />
+                      <GoogleIcon className="w-5 h-5" />
                     )}
-                  </button>
+                    Continue with Google
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="w-full justify-start gap-3 h-12"
+                    onClick={() => handleOAuthSignIn("github")}
+                    disabled={!!oauthLoading}
+                  >
+                    {oauthLoading === "github" ? (
+                      <Loader2 className="w-5 h-5 animate-spin" />
+                    ) : (
+                      <GitHubIcon className="w-5 h-5" />
+                    )}
+                    Continue with GitHub
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="w-full justify-start gap-3 h-12"
+                    onClick={() => handleOAuthSignIn("apple")}
+                    disabled={!!oauthLoading}
+                  >
+                    {oauthLoading === "apple" ? (
+                      <Loader2 className="w-5 h-5 animate-spin" />
+                    ) : (
+                      <AppleIcon className="w-5 h-5" />
+                    )}
+                    Continue with Apple
+                  </Button>
                 </div>
-              </div>
 
-              {/* Error Message */}
-              {signInError && (
-                <p className="text-sm text-destructive">
-                  {signInError.message || "Invalid credentials"}
+                {/* Divider */}
+                <div className="relative my-6">
+                  <div className="absolute inset-0 flex items-center">
+                    <div className="w-full border-t border-border" />
+                  </div>
+                  <div className="relative flex justify-center text-xs uppercase">
+                    <span className="bg-card px-2 text-muted-foreground">or</span>
+                  </div>
+                </div>
+
+                {/* Anonymous Sign In */}
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="w-full"
+                  onClick={() => signInAnonymous()}
+                  disabled={isSigningInAnonymous}
+                >
+                  {isSigningInAnonymous ? (
+                    <>
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      Connecting...
+                    </>
+                  ) : (
+                    "Continue Anonymously"
+                  )}
+                </Button>
+
+                {/* Sign Up Link */}
+                <p className="mt-6 text-center text-sm text-muted-foreground">
+                  Don&apos;t have an account?{" "}
+                  <Link
+                    href="/signup"
+                    className="text-primary hover:underline"
+                  >
+                    Sign up
+                  </Link>
                 </p>
-              )}
-
-              {/* Submit Button */}
-              <Button
-                type="submit"
-                className="w-full"
-                disabled={isSigningIn}
-              >
-                {isSigningIn ? (
-                  <>
-                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                    Signing in...
-                  </>
-                ) : (
-                  "Sign In"
-                )}
-              </Button>
-
-              {/* Divider */}
-              <div className="relative my-6">
-                <div className="absolute inset-0 flex items-center">
-                  <div className="w-full border-t border-border" />
-                </div>
-                <div className="relative flex justify-center text-xs uppercase">
-                  <span className="bg-card px-2 text-muted-foreground">or continue with</span>
-                </div>
               </div>
+            ) : (
+              /* Web: Full form with email/password */
+              <>
+                <form onSubmit={handleSubmit} className="space-y-4">
+                  {/* Email Field */}
+                  <div className="space-y-2">
+                    <label htmlFor="email" className="text-sm font-medium">
+                      Email
+                    </label>
+                    <div className="relative">
+                      <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                      <Input
+                        id="email"
+                        type="email"
+                        placeholder="you@example.com"
+                        value={email}
+                        onChange={(e) => setEmail(e.target.value)}
+                        className="pl-10"
+                        required
+                      />
+                    </div>
+                  </div>
 
-              {/* OAuth Buttons */}
-              <div className="grid grid-cols-3 gap-3">
-                <Button
-                  type="button"
-                  variant="outline"
-                  className="w-full"
-                  onClick={() => handleOAuthSignIn("google")}
-                >
-                  <GoogleIcon className="w-5 h-5" />
-                  <span className="sr-only">Sign in with Google</span>
-                </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  className="w-full"
-                  onClick={() => handleOAuthSignIn("github")}
-                >
-                  <GitHubIcon className="w-5 h-5" />
-                  <span className="sr-only">Sign in with GitHub</span>
-                </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  className="w-full"
-                  onClick={() => handleOAuthSignIn("apple")}
-                >
-                  <AppleIcon className="w-5 h-5" />
-                  <span className="sr-only">Sign in with Apple</span>
-                </Button>
-              </div>
+                  {/* Password Field */}
+                  <div className="space-y-2">
+                    <label htmlFor="password" className="text-sm font-medium">
+                      Password
+                    </label>
+                    <div className="relative">
+                      <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                      <Input
+                        id="password"
+                        type={showPassword ? "text" : "password"}
+                        placeholder="Your password"
+                        value={password}
+                        onChange={(e) => setPassword(e.target.value)}
+                        className="pl-10 pr-10"
+                        required
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowPassword(!showPassword)}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                      >
+                        {showPassword ? (
+                          <EyeOff className="w-4 h-4" />
+                        ) : (
+                          <Eye className="w-4 h-4" />
+                        )}
+                      </button>
+                    </div>
+                  </div>
 
-              {/* Divider */}
-              <div className="relative my-6">
-                <div className="absolute inset-0 flex items-center">
-                  <div className="w-full border-t border-border" />
-                </div>
-                <div className="relative flex justify-center text-xs uppercase">
-                  <span className="bg-card px-2 text-muted-foreground">or</span>
-                </div>
-              </div>
+                  {/* Error Message */}
+                  {(signInError || oauthError) && (
+                    <p className="text-sm text-destructive">
+                      {oauthError || signInError?.message || "Invalid credentials"}
+                    </p>
+                  )}
 
-              {/* Anonymous Sign In */}
-              <Button
-                type="button"
-                variant="outline"
-                className="w-full"
-                onClick={() => signInAnonymous()}
-                disabled={isSigningInAnonymous}
-              >
-                {isSigningInAnonymous ? (
-                  <>
-                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                    Connecting...
-                  </>
-                ) : (
-                  "Continue Anonymously"
-                )}
-              </Button>
-            </form>
+                  {/* Submit Button */}
+                  <Button
+                    type="submit"
+                    className="w-full"
+                    disabled={isSigningIn}
+                  >
+                    {isSigningIn ? (
+                      <>
+                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                        Signing in...
+                      </>
+                    ) : (
+                      "Sign In"
+                    )}
+                  </Button>
 
-            {/* Sign Up Link */}
-            <p className="mt-6 text-center text-sm text-muted-foreground">
-              Don&apos;t have an account?{" "}
-              <Link
-                href="/signup"
-                className="text-primary hover:underline"
-              >
-                Sign up
-              </Link>
-            </p>
+                  {/* Divider */}
+                  <div className="relative my-6">
+                    <div className="absolute inset-0 flex items-center">
+                      <div className="w-full border-t border-border" />
+                    </div>
+                    <div className="relative flex justify-center text-xs uppercase">
+                      <span className="bg-card px-2 text-muted-foreground">or continue with</span>
+                    </div>
+                  </div>
+
+                  {/* OAuth Buttons */}
+                  <div className="grid grid-cols-3 gap-3">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="w-full"
+                      onClick={() => handleOAuthSignIn("google")}
+                      disabled={!!oauthLoading}
+                    >
+                      {oauthLoading === "google" ? (
+                        <Loader2 className="w-5 h-5 animate-spin" />
+                      ) : (
+                        <GoogleIcon className="w-5 h-5" />
+                      )}
+                      <span className="sr-only">Sign in with Google</span>
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="w-full"
+                      onClick={() => handleOAuthSignIn("github")}
+                      disabled={!!oauthLoading}
+                    >
+                      {oauthLoading === "github" ? (
+                        <Loader2 className="w-5 h-5 animate-spin" />
+                      ) : (
+                        <GitHubIcon className="w-5 h-5" />
+                      )}
+                      <span className="sr-only">Sign in with GitHub</span>
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="w-full"
+                      onClick={() => handleOAuthSignIn("apple")}
+                      disabled={!!oauthLoading}
+                    >
+                      {oauthLoading === "apple" ? (
+                        <Loader2 className="w-5 h-5 animate-spin" />
+                      ) : (
+                        <AppleIcon className="w-5 h-5" />
+                      )}
+                      <span className="sr-only">Sign in with Apple</span>
+                    </Button>
+                  </div>
+
+                  {/* Divider */}
+                  <div className="relative my-6">
+                    <div className="absolute inset-0 flex items-center">
+                      <div className="w-full border-t border-border" />
+                    </div>
+                    <div className="relative flex justify-center text-xs uppercase">
+                      <span className="bg-card px-2 text-muted-foreground">or</span>
+                    </div>
+                  </div>
+
+                  {/* Anonymous Sign In */}
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="w-full"
+                    onClick={() => signInAnonymous()}
+                    disabled={isSigningInAnonymous}
+                  >
+                    {isSigningInAnonymous ? (
+                      <>
+                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                        Connecting...
+                      </>
+                    ) : (
+                      "Continue Anonymously"
+                    )}
+                  </Button>
+                </form>
+
+                {/* Sign Up Link */}
+                <p className="mt-6 text-center text-sm text-muted-foreground">
+                  Don&apos;t have an account?{" "}
+                  <Link
+                    href="/signup"
+                    className="text-primary hover:underline"
+                  >
+                    Sign up
+                  </Link>
+                </p>
+              </>
+            )}
           </CardContent>
         </Card>
 
