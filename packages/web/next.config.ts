@@ -1,8 +1,18 @@
 import type { NextConfig } from "next";
 
+// Check if building for static export (mobile or desktop)
+const isStaticExport =
+  process.env.CAPACITOR_BUILD === "true" || process.env.TAURI_BUILD === "true";
+
 const nextConfig: NextConfig = {
-  // Output configuration for deployment
-  output: "standalone",
+  // Output configuration for Capacitor/Tauri builds
+  // Use "standalone" for Vercel/server deployment, "export" for mobile/desktop
+  output: isStaticExport ? "export" : "standalone",
+
+  // Required for static export (Capacitor/Tauri)
+  images: {
+    unoptimized: isStaticExport,
+  },
 
   // Strict mode for development
   reactStrictMode: true,
