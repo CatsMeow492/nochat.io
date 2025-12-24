@@ -8,6 +8,7 @@
 #
 # Required Secrets:
 # - TAURI_PRIVATE_KEY: Tauri updater signing key
+# - TAURI_PRIVATE_KEY_PASSWORD: Password for the Tauri signing key
 # - APPLE_CERTIFICATE: Base64-encoded .p12 certificate
 # - APPLE_CERTIFICATE_PASSWORD: Certificate password
 # - APPLE_SIGNING_IDENTITY: e.g., "Developer ID Application: Your Name (TEAM_ID)"
@@ -36,6 +37,7 @@ permissions:
 
 env:
   TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
+  TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_PRIVATE_KEY_PASSWORD }}
   CARGO_TERM_COLOR: always
 
 jobs:
@@ -106,6 +108,9 @@ jobs:
           security default-keychain -s temp.keychain
           security unlock-keychain -p actions temp.keychain
 
+          # Add temp.keychain to the search list (critical for codesign to find identity)
+          security list-keychains -d user -s temp.keychain
+
           # Import certificate
           security import certificate.p12 -k temp.keychain \
             -P "$APPLE_CERTIFICATE_PASSWORD" \
@@ -114,6 +119,9 @@ jobs:
 
           # Allow codesign to access keychain
           security set-key-partition-list -S apple-tool:,apple: -s -k actions temp.keychain
+
+          # Verify identity is available
+          security find-identity -v -p codesigning temp.keychain
 
           # Clean up
           rm certificate.p12

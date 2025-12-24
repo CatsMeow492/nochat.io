@@ -41,14 +41,18 @@ Go to your GitHub repository → Settings → Secrets and variables → Actions,
    ```
    - Backup stored at: `~/.tauri/nochat.key`
 
+8. **TAURI_PRIVATE_KEY_PASSWORD**
+   - The password used when generating the Tauri signing key
+   - This was the password entered during `npx tauri signer generate`
+
 The public key is already configured in `packages/desktop/src-tauri/tauri.conf.json`.
 
 ### Optional: Windows Code Signing (Azure Key Vault)
 
-8. **AZURE_KEY_VAULT_URL** - Azure Key Vault URL
-9. **AZURE_CLIENT_ID** - Azure Service Principal client ID
-10. **AZURE_CLIENT_SECRET** - Azure Service Principal secret
-11. **AZURE_CERT_NAME** - Certificate name in Key Vault
+9. **AZURE_KEY_VAULT_URL** - Azure Key Vault URL
+10. **AZURE_CLIENT_ID** - Azure Service Principal client ID
+11. **AZURE_CLIENT_SECRET** - Azure Service Principal secret
+12. **AZURE_CERT_NAME** - Certificate name in Key Vault
 
 ## Triggering a Release
 
