@@ -3,14 +3,15 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "build:frontend": "cd ../web && npm run build:desktop && cp -r out/* ../desktop/dist/",
+    "build:frontend": "npm run --prefix ../web build:desktop && shx mkdir -p dist && shx cp -r ../web/out/* dist/",
     "tauri": "tauri",
     "dev": "npm run build:frontend && tauri dev",
     "build": "npm run build:frontend && tauri build",
     "build:debug": "npm run build:frontend && tauri build --debug"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "^2.0.0"
+    "@tauri-apps/cli": "^2.0.0",
+    "shx": "^0.4.0"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.0.0",
