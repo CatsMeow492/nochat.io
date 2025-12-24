@@ -179,15 +179,34 @@ jobs:
         run: |
           DMG="packages/desktop/target/universal-apple-darwin/release/bundle/dmg/NoChat_${VERSION}_universal.dmg"
 
-          # Submit for notarization
-          xcrun notarytool submit "$DMG" \
+          # Submit for notarization and capture output
+          NOTARIZE_OUTPUT=$(xcrun notarytool submit "$DMG" \
             --apple-id "$APPLE_ID" \
             --password "$APPLE_PASSWORD" \
             --team-id "$APPLE_TEAM_ID" \
-            --wait
+            --wait 2>&1) || true
 
-          # Staple ticket
-          xcrun stapler staple "$DMG"
+          echo "$NOTARIZE_OUTPUT"
+
+          # Extract submission ID
+          SUBMISSION_ID=$(echo "$NOTARIZE_OUTPUT" | grep "id:" | head -1 | awk '{print $2}')
+          echo "Submission ID: $SUBMISSION_ID"
+
+          # Check if notarization was successful
+          if echo "$NOTARIZE_OUTPUT" | grep -q "status: Accepted"; then
+            echo "Notarization successful!"
+            # Staple ticket
+            xcrun stapler staple "$DMG"
+          else
+            echo "Notarization failed. Fetching log..."
+            xcrun notarytool log "$SUBMISSION_ID" \
+              --apple-id "$APPLE_ID" \
+              --password "$APPLE_PASSWORD" \
+              --team-id "$APPLE_TEAM_ID" \
+              notarization-log.json || true
+            cat notarization-log.json
+            exit 1
+          fi
 
       - name: Sign for updater
         run: |
