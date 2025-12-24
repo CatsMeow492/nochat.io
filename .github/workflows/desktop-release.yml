@@ -134,7 +134,7 @@ jobs:
         env:
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
         run: |
-          APP="packages/desktop/src-tauri/target/universal-apple-darwin/release/bundle/macos/NoChat.app"
+          APP="packages/desktop/target/universal-apple-darwin/release/bundle/macos/NoChat.app"
 
           codesign --deep --force --verify --verbose \
             --sign "$APPLE_SIGNING_IDENTITY" \
@@ -149,7 +149,7 @@ jobs:
         env:
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
         run: |
-          DMG=$(find packages/desktop/src-tauri/target -name "*.dmg" -type f | head -1)
+          DMG=$(find packages/desktop/target -name "*.dmg" -type f | head -1)
           codesign --sign "$APPLE_SIGNING_IDENTITY" --options runtime "$DMG"
 
           # Rename with version
@@ -162,7 +162,7 @@ jobs:
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
-          DMG="packages/desktop/src-tauri/target/universal-apple-darwin/release/bundle/dmg/NoChat_${VERSION}_universal.dmg"
+          DMG="packages/desktop/target/universal-apple-darwin/release/bundle/dmg/NoChat_${VERSION}_universal.dmg"
 
           # Submit for notarization
           xcrun notarytool submit "$DMG" \
@@ -177,7 +177,7 @@ jobs:
       - name: Sign for updater
         run: |
           cd packages/desktop
-          DMG="src-tauri/target/universal-apple-darwin/release/bundle/dmg/NoChat_${VERSION}_universal.dmg"
+          DMG="target/universal-apple-darwin/release/bundle/dmg/NoChat_${VERSION}_universal.dmg"
 
           # Create signature using npx (tauri-cli is installed as devDependency)
           npx tauri signer sign --private-key "$TAURI_PRIVATE_KEY" "$DMG" > "${DMG}.sig"
@@ -187,8 +187,8 @@ jobs:
         with:
           name: macos-release
           path: |
-            packages/desktop/src-tauri/target/universal-apple-darwin/release/bundle/dmg/NoChat_${{ env.VERSION }}_universal.dmg
-            packages/desktop/src-tauri/target/universal-apple-darwin/release/bundle/dmg/NoChat_${{ env.VERSION }}_universal.dmg.sig
+            packages/desktop/target/universal-apple-darwin/release/bundle/dmg/NoChat_${{ env.VERSION }}_universal.dmg
+            packages/desktop/target/universal-apple-darwin/release/bundle/dmg/NoChat_${{ env.VERSION }}_universal.dmg.sig
           if-no-files-found: error
 
   # Build Windows (x64)
@@ -255,7 +255,7 @@ jobs:
       - name: Sign for updater
         run: |
           cd packages/desktop
-          $Installer = Get-ChildItem -Path "src-tauri/target/release/bundle/nsis" -Filter "*.exe" | Select-Object -First 1
+          $Installer = Get-ChildItem -Path "target/release/bundle/nsis" -Filter "*.exe" | Select-Object -First 1
 
           # Create signature using npx (tauri-cli is installed as devDependency)
           npx tauri signer sign --private-key $env:TAURI_PRIVATE_KEY $Installer.FullName | Out-File -FilePath "$($Installer.FullName).sig" -Encoding utf8 -NoNewline
@@ -271,8 +271,8 @@ jobs:
         with:
           name: windows-release
           path: |
-            packages/desktop/src-tauri/target/release/bundle/nsis/NoChat_${{ env.VERSION }}_x64-setup.exe
-            packages/desktop/src-tauri/target/release/bundle/nsis/NoChat_${{ env.VERSION }}_x64-setup.exe.sig
+            packages/desktop/target/release/bundle/nsis/NoChat_${{ env.VERSION }}_x64-setup.exe
+            packages/desktop/target/release/bundle/nsis/NoChat_${{ env.VERSION }}_x64-setup.exe.sig
           if-no-files-found: error
 
   # Build Linux (x64)
@@ -327,7 +327,7 @@ jobs:
       - name: Sign for updater
         run: |
           cd packages/desktop
-          APPIMAGE=$(find src-tauri/target/release/bundle/appimage -name "*.AppImage" | head -1)
+          APPIMAGE=$(find target/release/bundle/appimage -name "*.AppImage" | head -1)
 
           # Create signature using npx (tauri-cli is installed as devDependency)
           npx tauri signer sign --private-key "$TAURI_PRIVATE_KEY" "$APPIMAGE" > "${APPIMAGE}.sig"
@@ -341,8 +341,8 @@ jobs:
         with:
           name: linux-release
           path: |
-            packages/desktop/src-tauri/target/release/bundle/appimage/NoChat_${{ env.VERSION }}_amd64.AppImage
-            packages/desktop/src-tauri/target/release/bundle/appimage/NoChat_${{ env.VERSION }}_amd64.AppImage.sig
+            packages/desktop/target/release/bundle/appimage/NoChat_${{ env.VERSION }}_amd64.AppImage
+            packages/desktop/target/release/bundle/appimage/NoChat_${{ env.VERSION }}_amd64.AppImage.sig
           if-no-files-found: error
 
   # Create GitHub Release
