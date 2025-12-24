@@ -6,6 +6,8 @@ import { useAuth } from "@/hooks";
 import { useAuthStore } from "@/stores";
 import { ChatSidebar } from "@/components/chat/sidebar";
 import { OfflineBanner } from "@/components/offline-banner";
+import { DesktopAppBanner } from "@/components/desktop-app-banner";
+import { DesktopAppModal } from "@/components/desktop-app-modal";
 
 export default function ChatLayout({
   children,
@@ -68,10 +70,13 @@ export default function ChatLayout({
   return (
     <div className="flex flex-col h-screen overflow-hidden">
       <OfflineBanner />
+      <DesktopAppBanner />
       <div className="flex flex-1 overflow-hidden">
         <ChatSidebar />
         <main className="flex-1 flex flex-col overflow-hidden">{children}</main>
       </div>
+      {/* Show modal on first sign-in (only on web, not desktop app) */}
+      <DesktopAppModal trigger={!isTauri && isAuthorized} />
     </div>
   );
 }

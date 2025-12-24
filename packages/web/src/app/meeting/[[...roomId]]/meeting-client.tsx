@@ -32,6 +32,7 @@ import {
   useVideoEffects,
   type BackgroundEffect,
 } from "@/components/video-effects";
+import { MeetingDesktopPrompt } from "@/components/meeting-desktop-prompt";
 
 // Corner positions for the PiP window
 type Corner = "top-left" | "top-right" | "bottom-left" | "bottom-right";
@@ -447,6 +448,9 @@ export default function MeetingClient() {
               <br />
               All communication is end-to-end encrypted.
             </p>
+
+            {/* Desktop app prompt */}
+            <MeetingDesktopPrompt className="max-w-md mx-auto" />
           </div>
         </main>
       </TooltipProvider>
@@ -623,7 +627,7 @@ export default function MeetingClient() {
 
         {/* Waiting for others */}
         {state.isConnected && state.userCount === 1 && (
-          <div className="absolute top-20 left-1/2 -translate-x-1/2 z-10">
+          <div className="absolute top-20 left-1/2 -translate-x-1/2 z-10 space-y-3">
             <Card className="px-4 py-3 flex items-center gap-3">
               <div className="w-2 h-2 rounded-full bg-yellow-500 animate-pulse" />
               <span className="text-sm">Waiting for others to join...</span>
@@ -632,6 +636,7 @@ export default function MeetingClient() {
                 Share
               </Button>
             </Card>
+            <MeetingDesktopPrompt />
           </div>
         )}
       </main>
