@@ -138,13 +138,49 @@ jobs:
           sed -i '' 's/"signingIdentity":.*/"signingIdentity": null,/' src-tauri/tauri.conf.json
           npx tauri build --target universal-apple-darwin
 
-      # TODO: Re-enable signing once Developer ID Application certificate is configured
-      # Current APPLE_CERTIFICATE contains iPhone Distribution instead of Developer ID Application
-      - name: Rename DMG
+      - name: Sign app bundle
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: |
+          APP="packages/desktop/target/universal-apple-darwin/release/bundle/macos/NoChat.app"
+
+          codesign --deep --force --verify --verbose \
+            --sign "$APPLE_SIGNING_IDENTITY" \
+            --options runtime \
+            --entitlements packages/desktop/src-tauri/entitlements.plist \
+            "$APP"
+
+          # Verify
+          codesign --verify --verbose=2 "$APP"
+
+      - name: Find and sign DMG
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
         run: |
           DMG=$(find packages/desktop/target -name "*.dmg" -type f | head -1)
+          codesign --sign "$APPLE_SIGNING_IDENTITY" --options runtime "$DMG"
+
+          # Rename with version
           DMG_DIR=$(dirname "$DMG")
           mv "$DMG" "$DMG_DIR/NoChat_${VERSION}_universal.dmg"
+
+      - name: Notarize
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          DMG="packages/desktop/target/universal-apple-darwin/release/bundle/dmg/NoChat_${VERSION}_universal.dmg"
+
+          # Submit for notarization
+          xcrun notarytool submit "$DMG" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait
+
+          # Staple ticket
+          xcrun stapler staple "$DMG"
 
       - name: Sign for updater
         run: |
