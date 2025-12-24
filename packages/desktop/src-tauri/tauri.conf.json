@@ -67,7 +67,7 @@
       }
     },
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDkzREI5N0VENTEwOEU0NkMKUldSczVBaFI3WmZiazlod1AzbzFkVmc2a2dEVG1uKzZrT2dhT05OK2FodS8zNWwxQTArdUZ6TjgK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEI0QzA1QzEyNkEwNjZCOUMKUldTY2F3WnFFbHpBdEhJdlY5NER1akl4N1gzU2IzODRSVnptWkYxQ09aZEcvSFhjUmdFNThURWUK",
       "endpoints": [
         "https://releases.nochat.io/desktop/{{target}}/{{arch}}/{{current_version}}"
       ],
