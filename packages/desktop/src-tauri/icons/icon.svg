@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#1a1a2e"/>
+      <stop offset="100%" style="stop-color:#0f0f1a"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#6366f1"/>
+      <stop offset="100%" style="stop-color:#8b5cf6"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1024" height="1024" rx="224" fill="url(#bg)"/>
+
+  <!-- Chat bubble -->
+  <path d="M256 288
+           C256 244 292 208 336 208
+           L688 208
+           C732 208 768 244 768 288
+           L768 544
+           C768 588 732 624 688 624
+           L448 624
+           L320 736
+           L320 624
+           L336 624
+           C292 624 256 588 256 544
+           Z"
+        fill="url(#accent)"
+        opacity="0.9"/>
+
+  <!-- Lock icon inside bubble (representing security) -->
+  <rect x="448" y="360" width="128" height="96" rx="12" fill="#1a1a2e" opacity="0.8"/>
+  <path d="M480 360 L480 320
+           C480 288 502 264 512 264
+           C522 264 544 288 544 320
+           L544 360"
+        stroke="#1a1a2e"
+        stroke-width="24"
+        fill="none"
+        stroke-linecap="round"
+        opacity="0.8"/>
+
+  <!-- Keyhole -->
+  <circle cx="512" cy="400" r="16" fill="url(#accent)"/>
+  <rect x="504" y="408" width="16" height="28" rx="4" fill="url(#accent)"/>
+</svg>

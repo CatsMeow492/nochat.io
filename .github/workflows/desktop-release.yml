@@ -1,0 +1,427 @@
+# NoChat Desktop Release Workflow
+#
+# Builds, signs, notarizes (macOS), and releases desktop applications.
+#
+# Triggers:
+# - Push tag: desktop-v* (e.g., desktop-v1.0.0)
+# - Manual workflow dispatch with version input
+#
+# Required Secrets:
+# - TAURI_PRIVATE_KEY: Tauri updater signing key
+# - APPLE_CERTIFICATE: Base64-encoded .p12 certificate
+# - APPLE_CERTIFICATE_PASSWORD: Certificate password
+# - APPLE_SIGNING_IDENTITY: e.g., "Developer ID Application: Your Name (TEAM_ID)"
+# - APPLE_ID: Apple Developer email
+# - APPLE_PASSWORD: App-specific password
+# - APPLE_TEAM_ID: Developer Team ID
+# - AZURE_KEY_VAULT_URL: (Optional) For Windows EV signing
+# - AZURE_CLIENT_ID: (Optional) Azure service principal
+# - AZURE_CLIENT_SECRET: (Optional) Azure service principal secret
+
+name: Desktop Release
+
+on:
+  push:
+    tags:
+      - 'desktop-v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version number (e.g., 1.0.0)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+env:
+  TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Determine version from tag or input
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Determine version
+        id: version
+        run: |
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            # Extract version from tag (desktop-v1.0.0 -> 1.0.0)
+            VERSION="${GITHUB_REF#refs/tags/desktop-v}"
+            echo "version=$VERSION" >> $GITHUB_OUTPUT
+          fi
+
+  # Build macOS (Universal Binary - arm64 + x86_64)
+  build-macos:
+    needs: prepare
+    runs-on: macos-14  # M1 runner for arm64 native + x86_64 cross-compile
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: packages/web/package-lock.json
+
+      - name: Install Rust targets for universal binary
+        run: |
+          rustup target add aarch64-apple-darwin
+          rustup target add x86_64-apple-darwin
+
+      - name: Install frontend dependencies
+        run: |
+          cd packages/web
+          npm ci
+
+      - name: Install desktop dependencies
+        run: |
+          cd packages/desktop
+          npm ci
+
+      - name: Import signing certificate
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          # Decode certificate
+          echo "$APPLE_CERTIFICATE" | base64 --decode > certificate.p12
+
+          # Create temporary keychain
+          security create-keychain -p actions temp.keychain
+          security default-keychain -s temp.keychain
+          security unlock-keychain -p actions temp.keychain
+
+          # Import certificate
+          security import certificate.p12 -k temp.keychain \
+            -P "$APPLE_CERTIFICATE_PASSWORD" \
+            -T /usr/bin/codesign \
+            -T /usr/bin/productbuild
+
+          # Allow codesign to access keychain
+          security set-key-partition-list -S apple-tool:,apple: -s -k actions temp.keychain
+
+          # Clean up
+          rm certificate.p12
+
+      - name: Build frontend
+        run: |
+          cd packages/desktop
+          npm run build:frontend
+
+      - name: Build Tauri (Universal Binary)
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: |
+          cd packages/desktop
+          cargo tauri build --target universal-apple-darwin
+
+      - name: Sign app bundle
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: |
+          APP="packages/desktop/src-tauri/target/universal-apple-darwin/release/bundle/macos/NoChat.app"
+
+          codesign --deep --force --verify --verbose \
+            --sign "$APPLE_SIGNING_IDENTITY" \
+            --options runtime \
+            --entitlements packages/desktop/src-tauri/entitlements.plist \
+            "$APP"
+
+          # Verify
+          codesign --verify --verbose=2 "$APP"
+
+      - name: Find and sign DMG
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: |
+          DMG=$(find packages/desktop/src-tauri/target -name "*.dmg" -type f | head -1)
+          codesign --sign "$APPLE_SIGNING_IDENTITY" --options runtime "$DMG"
+
+          # Rename with version
+          DMG_DIR=$(dirname "$DMG")
+          mv "$DMG" "$DMG_DIR/NoChat_${VERSION}_universal.dmg"
+
+      - name: Notarize
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          DMG="packages/desktop/src-tauri/target/universal-apple-darwin/release/bundle/dmg/NoChat_${VERSION}_universal.dmg"
+
+          # Submit for notarization
+          xcrun notarytool submit "$DMG" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait
+
+          # Staple ticket
+          xcrun stapler staple "$DMG"
+
+      - name: Sign for updater
+        run: |
+          DMG="packages/desktop/src-tauri/target/universal-apple-darwin/release/bundle/dmg/NoChat_${VERSION}_universal.dmg"
+
+          # Create signature
+          cargo install tauri-cli --version "^2" || true
+          cargo tauri signer sign --private-key "$TAURI_PRIVATE_KEY" "$DMG" > "${DMG}.sig"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-release
+          path: |
+            packages/desktop/src-tauri/target/universal-apple-darwin/release/bundle/dmg/NoChat_${{ env.VERSION }}_universal.dmg
+            packages/desktop/src-tauri/target/universal-apple-darwin/release/bundle/dmg/NoChat_${{ env.VERSION }}_universal.dmg.sig
+          if-no-files-found: error
+
+  # Build Windows (x64)
+  build-windows:
+    needs: prepare
+    runs-on: windows-latest
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: packages/web/package-lock.json
+
+      - name: Install frontend dependencies
+        run: |
+          cd packages/web
+          npm ci
+
+      - name: Install desktop dependencies
+        run: |
+          cd packages/desktop
+          npm ci
+
+      - name: Build frontend
+        run: |
+          cd packages/desktop
+          npm run build:frontend
+
+      - name: Build Tauri
+        run: |
+          cd packages/desktop
+          cargo tauri build
+
+      - name: Install AzureSignTool
+        if: ${{ secrets.AZURE_KEY_VAULT_URL != '' }}
+        run: dotnet tool install --global AzureSignTool
+
+      - name: Sign with Azure Key Vault
+        if: ${{ secrets.AZURE_KEY_VAULT_URL != '' }}
+        env:
+          AZURE_KEY_VAULT_URL: ${{ secrets.AZURE_KEY_VAULT_URL }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_CERT_NAME: ${{ secrets.AZURE_CERT_NAME }}
+        run: |
+          $Installer = Get-ChildItem -Path "packages/desktop/src-tauri/target/release/bundle/nsis" -Filter "*.exe" | Select-Object -First 1
+
+          AzureSignTool sign `
+            --azure-key-vault-url $env:AZURE_KEY_VAULT_URL `
+            --azure-key-vault-client-id $env:AZURE_CLIENT_ID `
+            --azure-key-vault-client-secret $env:AZURE_CLIENT_SECRET `
+            --azure-key-vault-certificate $env:AZURE_CERT_NAME `
+            --timestamp-rfc3161 "http://timestamp.digicert.com" `
+            --description "NoChat Desktop" `
+            $Installer.FullName
+
+      - name: Sign for updater
+        run: |
+          $Installer = Get-ChildItem -Path "packages/desktop/src-tauri/target/release/bundle/nsis" -Filter "*.exe" | Select-Object -First 1
+
+          # Install Tauri CLI
+          cargo install tauri-cli --version "^2" 2>$null
+
+          # Create signature
+          cargo tauri signer sign --private-key $env:TAURI_PRIVATE_KEY $Installer.FullName | Out-File -FilePath "$($Installer.FullName).sig" -Encoding utf8 -NoNewline
+
+          # Rename with version
+          $NewName = "NoChat_${{ env.VERSION }}_x64-setup.exe"
+          $NewPath = Join-Path (Split-Path $Installer.FullName) $NewName
+          Move-Item -Force $Installer.FullName $NewPath
+          Move-Item -Force "$($Installer.FullName).sig" "$NewPath.sig"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-release
+          path: |
+            packages/desktop/src-tauri/target/release/bundle/nsis/NoChat_${{ env.VERSION }}_x64-setup.exe
+            packages/desktop/src-tauri/target/release/bundle/nsis/NoChat_${{ env.VERSION }}_x64-setup.exe.sig
+          if-no-files-found: error
+
+  # Build Linux (x64)
+  build-linux:
+    needs: prepare
+    runs-on: ubuntu-22.04
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: packages/web/package-lock.json
+
+      - name: Install frontend dependencies
+        run: |
+          cd packages/web
+          npm ci
+
+      - name: Install desktop dependencies
+        run: |
+          cd packages/desktop
+          npm ci
+
+      - name: Build frontend
+        run: |
+          cd packages/desktop
+          npm run build:frontend
+
+      - name: Build Tauri
+        run: |
+          cd packages/desktop
+          cargo tauri build
+
+      - name: Sign for updater
+        run: |
+          APPIMAGE=$(find packages/desktop/src-tauri/target/release/bundle/appimage -name "*.AppImage" | head -1)
+
+          # Install Tauri CLI
+          cargo install tauri-cli --version "^2" || true
+
+          # Create signature
+          cargo tauri signer sign --private-key "$TAURI_PRIVATE_KEY" "$APPIMAGE" > "${APPIMAGE}.sig"
+
+          # Rename with version
+          mv "$APPIMAGE" "$(dirname "$APPIMAGE")/NoChat_${VERSION}_amd64.AppImage"
+          mv "${APPIMAGE}.sig" "$(dirname "$APPIMAGE")/NoChat_${VERSION}_amd64.AppImage.sig"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-release
+          path: |
+            packages/desktop/src-tauri/target/release/bundle/appimage/NoChat_${{ env.VERSION }}_amd64.AppImage
+            packages/desktop/src-tauri/target/release/bundle/appimage/NoChat_${{ env.VERSION }}_amd64.AppImage.sig
+          if-no-files-found: error
+
+  # Create GitHub Release
+  release:
+    needs: [prepare, build-macos, build-windows, build-linux]
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download macOS artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: macos-release
+          path: release/macos
+
+      - name: Download Windows artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-release
+          path: release/windows
+
+      - name: Download Linux artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-release
+          path: release/linux
+
+      - name: Create update manifest
+        run: |
+          cat > release/latest.json << EOF
+          {
+            "version": "${{ env.VERSION }}",
+            "notes": "See release notes below",
+            "pub_date": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "platforms": {
+              "darwin-aarch64": {
+                "signature": "$(cat release/macos/NoChat_${{ env.VERSION }}_universal.dmg.sig)",
+                "url": "https://github.com/${{ github.repository }}/releases/download/desktop-v${{ env.VERSION }}/NoChat_${{ env.VERSION }}_universal.dmg"
+              },
+              "darwin-x86_64": {
+                "signature": "$(cat release/macos/NoChat_${{ env.VERSION }}_universal.dmg.sig)",
+                "url": "https://github.com/${{ github.repository }}/releases/download/desktop-v${{ env.VERSION }}/NoChat_${{ env.VERSION }}_universal.dmg"
+              },
+              "windows-x86_64": {
+                "signature": "$(cat release/windows/NoChat_${{ env.VERSION }}_x64-setup.exe.sig)",
+                "url": "https://github.com/${{ github.repository }}/releases/download/desktop-v${{ env.VERSION }}/NoChat_${{ env.VERSION }}_x64-setup.exe"
+              },
+              "linux-x86_64": {
+                "signature": "$(cat release/linux/NoChat_${{ env.VERSION }}_amd64.AppImage.sig)",
+                "url": "https://github.com/${{ github.repository }}/releases/download/desktop-v${{ env.VERSION }}/NoChat_${{ env.VERSION }}_amd64.AppImage"
+              }
+            }
+          }
+          EOF
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: desktop-v${{ env.VERSION }}
+          name: NoChat Desktop v${{ env.VERSION }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          files: |
+            release/macos/NoChat_${{ env.VERSION }}_universal.dmg
+            release/macos/NoChat_${{ env.VERSION }}_universal.dmg.sig
+            release/windows/NoChat_${{ env.VERSION }}_x64-setup.exe
+            release/windows/NoChat_${{ env.VERSION }}_x64-setup.exe.sig
+            release/linux/NoChat_${{ env.VERSION }}_amd64.AppImage
+            release/linux/NoChat_${{ env.VERSION }}_amd64.AppImage.sig
+            release/latest.json
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
