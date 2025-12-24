@@ -128,7 +128,7 @@ jobs:
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
         run: |
           cd packages/desktop
-          cargo tauri build --target universal-apple-darwin
+          npx tauri build --target universal-apple-darwin
 
       - name: Sign app bundle
         env:
@@ -176,11 +176,11 @@ jobs:
 
       - name: Sign for updater
         run: |
-          DMG="packages/desktop/src-tauri/target/universal-apple-darwin/release/bundle/dmg/NoChat_${VERSION}_universal.dmg"
+          cd packages/desktop
+          DMG="src-tauri/target/universal-apple-darwin/release/bundle/dmg/NoChat_${VERSION}_universal.dmg"
 
-          # Create signature
-          cargo install tauri-cli --version "^2" || true
-          cargo tauri signer sign --private-key "$TAURI_PRIVATE_KEY" "$DMG" > "${DMG}.sig"
+          # Create signature using npx (tauri-cli is installed as devDependency)
+          npx tauri signer sign --private-key "$TAURI_PRIVATE_KEY" "$DMG" > "${DMG}.sig"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -229,7 +229,7 @@ jobs:
       - name: Build Tauri
         run: |
           cd packages/desktop
-          cargo tauri build
+          npx tauri build
 
       # Optional: Windows code signing with Azure Key Vault
       # To enable, set AZURE_KEY_VAULT_URL, AZURE_CLIENT_ID, AZURE_CLIENT_SECRET, AZURE_CERT_NAME secrets
@@ -254,13 +254,11 @@ jobs:
 
       - name: Sign for updater
         run: |
-          $Installer = Get-ChildItem -Path "packages/desktop/src-tauri/target/release/bundle/nsis" -Filter "*.exe" | Select-Object -First 1
+          cd packages/desktop
+          $Installer = Get-ChildItem -Path "src-tauri/target/release/bundle/nsis" -Filter "*.exe" | Select-Object -First 1
 
-          # Install Tauri CLI
-          cargo install tauri-cli --version "^2" 2>$null
-
-          # Create signature
-          cargo tauri signer sign --private-key $env:TAURI_PRIVATE_KEY $Installer.FullName | Out-File -FilePath "$($Installer.FullName).sig" -Encoding utf8 -NoNewline
+          # Create signature using npx (tauri-cli is installed as devDependency)
+          npx tauri signer sign --private-key $env:TAURI_PRIVATE_KEY $Installer.FullName | Out-File -FilePath "$($Installer.FullName).sig" -Encoding utf8 -NoNewline
 
           # Rename with version
           $NewName = "NoChat_${{ env.VERSION }}_x64-setup.exe"
@@ -324,17 +322,15 @@ jobs:
       - name: Build Tauri
         run: |
           cd packages/desktop
-          cargo tauri build
+          npx tauri build
 
       - name: Sign for updater
         run: |
-          APPIMAGE=$(find packages/desktop/src-tauri/target/release/bundle/appimage -name "*.AppImage" | head -1)
+          cd packages/desktop
+          APPIMAGE=$(find src-tauri/target/release/bundle/appimage -name "*.AppImage" | head -1)
 
-          # Install Tauri CLI
-          cargo install tauri-cli --version "^2" || true
-
-          # Create signature
-          cargo tauri signer sign --private-key "$TAURI_PRIVATE_KEY" "$APPIMAGE" > "${APPIMAGE}.sig"
+          # Create signature using npx (tauri-cli is installed as devDependency)
+          npx tauri signer sign --private-key "$TAURI_PRIVATE_KEY" "$APPIMAGE" > "${APPIMAGE}.sig"
 
           # Rename with version
           mv "$APPIMAGE" "$(dirname "$APPIMAGE")/NoChat_${VERSION}_amd64.AppImage"
