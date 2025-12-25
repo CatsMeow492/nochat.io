@@ -125,6 +125,78 @@ class ApiClient {
     return this.request<{ user: any }>("/api/users/me");
   }
 
+  // Profile endpoints
+  async getMyProfile() {
+    return this.request<{
+      id: string;
+      username: string;
+      email?: string;
+      display_name: string;
+      avatar_url?: string;
+      bio?: string;
+      job_title?: string;
+      company?: string;
+      location?: string;
+      website?: string;
+      relationship_status?: string;
+      pronouns?: string;
+      birthday?: string;
+      created_at: string;
+      updated_at: string;
+    }>("/api/users/me/profile");
+  }
+
+  async updateMyProfile(data: {
+    display_name?: string;
+    avatar_url?: string;
+    bio?: string;
+    job_title?: string;
+    company?: string;
+    location?: string;
+    website?: string;
+    relationship_status?: string;
+    pronouns?: string;
+    birthday?: string;
+  }) {
+    return this.request<{
+      id: string;
+      username: string;
+      email?: string;
+      display_name: string;
+      avatar_url?: string;
+      bio?: string;
+      job_title?: string;
+      company?: string;
+      location?: string;
+      website?: string;
+      relationship_status?: string;
+      pronouns?: string;
+      birthday?: string;
+      created_at: string;
+      updated_at: string;
+    }>("/api/users/me/profile", {
+      method: "PUT",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async getUserProfile(userId: string) {
+    return this.request<{
+      id: string;
+      username: string;
+      display_name: string;
+      avatar_url?: string;
+      bio?: string;
+      job_title?: string;
+      company?: string;
+      location?: string;
+      website?: string;
+      relationship_status?: string;
+      pronouns?: string;
+      created_at: string;
+    }>(`/api/users/${userId}/profile`);
+  }
+
   async searchUsers(query: string, limit?: number) {
     const params = new URLSearchParams({ q: query });
     if (limit) params.set("limit", limit.toString());

@@ -11,6 +11,7 @@ import {
   Search,
   Menu,
   X,
+  Users,
 } from "lucide-react";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
@@ -28,7 +29,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { useAuth, useConversations } from "@/hooks";
+import { useAuth, useConversations, usePendingRequests } from "@/hooks";
 import { useCryptoStore } from "@/stores";
 import { cn } from "@/lib/utils";
 import { NewConversationDialog } from "./new-conversation-dialog";
@@ -39,6 +40,7 @@ function SidebarContent() {
   const { user, logout } = useAuth();
   const { conversations, isLoading, createConversation, isCreating } =
     useConversations();
+  const { count: pendingContactsCount } = usePendingRequests();
   const { status: encryptionStatus, identityFingerprint } = useCryptoStore();
   const [searchQuery, setSearchQuery] = useState("");
   const [newConversationOpen, setNewConversationOpen] = useState(false);
@@ -83,27 +85,57 @@ function SidebarContent() {
       <div className="p-4 border-b border-border">
         <div className="flex items-center justify-between mb-4">
           <h1 className="text-xl font-bold gradient-text">NoChat</h1>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <div className="flex items-center gap-1.5">
-                <Shield className={cn("w-4 h-4", getEncryptionStatusColor())} />
-              </div>
-            </TooltipTrigger>
-            <TooltipContent>
-              <p className="text-xs">
-                {encryptionStatus === "encrypted"
-                  ? "End-to-end encrypted"
-                  : encryptionStatus === "error"
-                  ? "Encryption error"
-                  : "Setting up encryption..."}
-              </p>
-              {identityFingerprint && (
-                <p className="text-xs text-muted-foreground font-mono mt-1">
-                  Key: {identityFingerprint.slice(0, 16)}
+          <div className="flex items-center gap-2">
+            {/* Contacts Button */}
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="relative h-8 w-8"
+                  onClick={() => router.push("/contacts")}
+                >
+                  <Users className="w-4 h-4" />
+                  {pendingContactsCount > 0 && (
+                    <span className="absolute -top-1 -right-1 w-4 h-4 bg-primary text-primary-foreground text-xs rounded-full flex items-center justify-center">
+                      {pendingContactsCount > 9 ? "9+" : pendingContactsCount}
+                    </span>
+                  )}
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>
+                <p className="text-xs">
+                  Contacts
+                  {pendingContactsCount > 0 && (
+                    <span className="ml-1">({pendingContactsCount} pending)</span>
+                  )}
                 </p>
-              )}
-            </TooltipContent>
-          </Tooltip>
+              </TooltipContent>
+            </Tooltip>
+
+            {/* Encryption Status */}
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <div className="flex items-center gap-1.5">
+                  <Shield className={cn("w-4 h-4", getEncryptionStatusColor())} />
+                </div>
+              </TooltipTrigger>
+              <TooltipContent>
+                <p className="text-xs">
+                  {encryptionStatus === "encrypted"
+                    ? "End-to-end encrypted"
+                    : encryptionStatus === "error"
+                    ? "Encryption error"
+                    : "Setting up encryption..."}
+                </p>
+                {identityFingerprint && (
+                  <p className="text-xs text-muted-foreground font-mono mt-1">
+                    Key: {identityFingerprint.slice(0, 16)}
+                  </p>
+                )}
+              </TooltipContent>
+            </Tooltip>
+          </div>
         </div>
 
         {/* Search */}
@@ -221,6 +253,10 @@ function SidebarContent() {
             </button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start" className="w-56">
+            <DropdownMenuItem onClick={() => router.push("/profile")}>
+              <User className="w-4 h-4 mr-2" />
+              Profile
+            </DropdownMenuItem>
             <DropdownMenuItem>
               <Settings className="w-4 h-4 mr-2" />
               Settings

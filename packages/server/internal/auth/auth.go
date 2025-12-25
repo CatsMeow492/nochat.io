@@ -459,3 +459,170 @@ func (s *Service) FindOrCreatePhoneUser(ctx context.Context, phoneNumber string)
 func stringPtr(s string) *string {
 	return &s
 }
+
+// GetUserProfile retrieves the full profile of a user including extended fields
+func (s *Service) GetUserProfile(ctx context.Context, userID uuid.UUID) (*models.UserProfile, error) {
+	var profile models.UserProfile
+
+	query := `
+		SELECT id, username, display_name, avatar_url, bio, job_title, company,
+		       location, website, relationship_status, pronouns, created_at
+		FROM users
+		WHERE id = $1
+	`
+
+	err := s.db.QueryRowContext(ctx, query, userID).Scan(
+		&profile.ID, &profile.Username, &profile.DisplayName, &profile.AvatarURL,
+		&profile.Bio, &profile.JobTitle, &profile.Company, &profile.Location,
+		&profile.Website, &profile.RelationshipStatus, &profile.Pronouns,
+		&profile.CreatedAt,
+	)
+
+	if err == sql.ErrNoRows {
+		return nil, ErrUserNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to query user profile: %w", err)
+	}
+
+	return &profile, nil
+}
+
+// GetFullUser retrieves the full user with all profile fields
+func (s *Service) GetFullUser(ctx context.Context, userID uuid.UUID) (*models.User, error) {
+	var user models.User
+
+	query := `
+		SELECT id, username, email, display_name, wallet_address, avatar_url,
+		       is_anonymous, phone_number, phone_verified, created_at, updated_at, last_seen_at,
+		       bio, job_title, company, location, website, relationship_status, pronouns, birthday
+		FROM users
+		WHERE id = $1
+	`
+
+	err := s.db.QueryRowContext(ctx, query, userID).Scan(
+		&user.ID, &user.Username, &user.Email, &user.DisplayName,
+		&user.WalletAddress, &user.AvatarURL, &user.IsAnonymous,
+		&user.PhoneNumber, &user.PhoneVerified,
+		&user.CreatedAt, &user.UpdatedAt, &user.LastSeenAt,
+		&user.Bio, &user.JobTitle, &user.Company, &user.Location,
+		&user.Website, &user.RelationshipStatus, &user.Pronouns, &user.Birthday,
+	)
+
+	if err == sql.ErrNoRows {
+		return nil, ErrUserNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to query full user: %w", err)
+	}
+
+	return &user, nil
+}
+
+// UpdateProfile updates the user's profile fields
+func (s *Service) UpdateProfile(ctx context.Context, userID uuid.UUID, req models.ProfileUpdateRequest) (*models.User, error) {
+	// Build dynamic update query based on which fields are provided
+	updates := []string{}
+	args := []interface{}{}
+	argNum := 1
+
+	if req.DisplayName != nil {
+		updates = append(updates, fmt.Sprintf("display_name = $%d", argNum))
+		args = append(args, *req.DisplayName)
+		argNum++
+	}
+	if req.AvatarURL != nil {
+		updates = append(updates, fmt.Sprintf("avatar_url = $%d", argNum))
+		args = append(args, *req.AvatarURL)
+		argNum++
+	}
+	if req.Bio != nil {
+		updates = append(updates, fmt.Sprintf("bio = $%d", argNum))
+		args = append(args, *req.Bio)
+		argNum++
+	}
+	if req.JobTitle != nil {
+		updates = append(updates, fmt.Sprintf("job_title = $%d", argNum))
+		args = append(args, *req.JobTitle)
+		argNum++
+	}
+	if req.Company != nil {
+		updates = append(updates, fmt.Sprintf("company = $%d", argNum))
+		args = append(args, *req.Company)
+		argNum++
+	}
+	if req.Location != nil {
+		updates = append(updates, fmt.Sprintf("location = $%d", argNum))
+		args = append(args, *req.Location)
+		argNum++
+	}
+	if req.Website != nil {
+		updates = append(updates, fmt.Sprintf("website = $%d", argNum))
+		args = append(args, *req.Website)
+		argNum++
+	}
+	if req.RelationshipStatus != nil {
+		// Validate relationship status
+		validStatuses := map[string]bool{
+			"single": true, "in_a_relationship": true, "engaged": true,
+			"married": true, "its_complicated": true, "open_relationship": true,
+			"prefer_not_to_say": true, "": true,
+		}
+		if !validStatuses[*req.RelationshipStatus] {
+			return nil, fmt.Errorf("invalid relationship status: %s", *req.RelationshipStatus)
+		}
+		if *req.RelationshipStatus == "" {
+			updates = append(updates, fmt.Sprintf("relationship_status = $%d", argNum))
+			args = append(args, nil)
+		} else {
+			updates = append(updates, fmt.Sprintf("relationship_status = $%d", argNum))
+			args = append(args, *req.RelationshipStatus)
+		}
+		argNum++
+	}
+	if req.Pronouns != nil {
+		updates = append(updates, fmt.Sprintf("pronouns = $%d", argNum))
+		args = append(args, *req.Pronouns)
+		argNum++
+	}
+	if req.Birthday != nil {
+		if *req.Birthday == "" {
+			updates = append(updates, fmt.Sprintf("birthday = $%d", argNum))
+			args = append(args, nil)
+		} else {
+			// Parse birthday from ISO string
+			birthday, err := time.Parse("2006-01-02", *req.Birthday)
+			if err != nil {
+				return nil, fmt.Errorf("invalid birthday format (use YYYY-MM-DD): %w", err)
+			}
+			updates = append(updates, fmt.Sprintf("birthday = $%d", argNum))
+			args = append(args, birthday)
+		}
+		argNum++
+	}
+
+	if len(updates) == 0 {
+		// No updates, just return the current user
+		return s.GetFullUser(ctx, userID)
+	}
+
+	// Always update updated_at
+	updates = append(updates, fmt.Sprintf("updated_at = $%d", argNum))
+	args = append(args, time.Now())
+	argNum++
+
+	// Add userID as the last argument
+	args = append(args, userID)
+
+	query := fmt.Sprintf(`
+		UPDATE users SET %s WHERE id = $%d
+	`, strings.Join(updates, ", "), argNum)
+
+	_, err := s.db.ExecContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to update profile: %w", err)
+	}
+
+	// Return the updated user
+	return s.GetFullUser(ctx, userID)
+}

@@ -205,8 +205,11 @@ func (s *Server) setupRouter() *mux.Router {
 
 	// User routes (protected)
 	router.HandleFunc("/api/users/me", s.authMiddleware(s.handleGetCurrentUser)).Methods("GET")
+	router.HandleFunc("/api/users/me/profile", s.authMiddleware(s.handleGetMyProfile)).Methods("GET")
+	router.HandleFunc("/api/users/me/profile", s.authMiddleware(s.handleUpdateMyProfile)).Methods("PUT")
 	router.HandleFunc("/api/users/search", s.authMiddleware(s.handleSearchUsers)).Methods("GET")
 	router.HandleFunc("/api/users/{id}", s.authMiddleware(s.handleGetUser)).Methods("GET")
+	router.HandleFunc("/api/users/{id}/profile", s.authMiddleware(s.handleGetUserProfile)).Methods("GET")
 
 	// ICE servers (for WebRTC)
 	router.HandleFunc("/api/ice-servers", s.handleICEServers).Methods("GET")
@@ -490,6 +493,54 @@ func (s *Server) handleGetUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	json.NewEncoder(w).Encode(user)
+}
+
+func (s *Server) handleGetMyProfile(w http.ResponseWriter, r *http.Request) {
+	userID := r.Context().Value("userID").(uuid.UUID)
+
+	user, err := s.authService.GetFullUser(r.Context(), userID)
+	if err != nil {
+		http.Error(w, "User not found", http.StatusNotFound)
+		return
+	}
+
+	json.NewEncoder(w).Encode(user)
+}
+
+func (s *Server) handleUpdateMyProfile(w http.ResponseWriter, r *http.Request) {
+	userID := r.Context().Value("userID").(uuid.UUID)
+
+	var req models.ProfileUpdateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	user, err := s.authService.UpdateProfile(r.Context(), userID, req)
+	if err != nil {
+		log.Printf("[Server] Failed to update profile: %v", err)
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	json.NewEncoder(w).Encode(user)
+}
+
+func (s *Server) handleGetUserProfile(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	userID, err := uuid.Parse(vars["id"])
+	if err != nil {
+		http.Error(w, "Invalid user ID", http.StatusBadRequest)
+		return
+	}
+
+	profile, err := s.authService.GetUserProfile(r.Context(), userID)
+	if err != nil {
+		http.Error(w, "User not found", http.StatusNotFound)
+		return
+	}
+
+	json.NewEncoder(w).Encode(profile)
 }
 
 func (s *Server) handleSearchUsers(w http.ResponseWriter, r *http.Request) {

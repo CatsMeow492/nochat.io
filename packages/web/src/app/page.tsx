@@ -277,20 +277,31 @@ export default function LandingPage() {
             {/* Divider */}
             <div className="flex items-center gap-4 my-2">
               <div className="flex-1 h-px bg-border" />
-              <span className="text-xs text-muted-foreground">or</span>
+              <span className="text-xs text-muted-foreground">or create an account</span>
               <div className="flex-1 h-px bg-border" />
             </div>
 
-            {/* Sign In for registered users */}
-            <Button
-              size="lg"
-              variant="ghost"
-              onClick={() => router.push("/signin")}
-              className="gap-2 text-muted-foreground hover:text-foreground"
-            >
-              <MessageSquare className="w-4 h-4" />
-              Sign in for secure messaging
-            </Button>
+            {/* Sign In / Sign Up buttons */}
+            <div className="flex gap-3 w-full">
+              <Button
+                size="lg"
+                variant="outline"
+                onClick={() => router.push("/signin")}
+                className="flex-1 gap-2 py-6 text-lg border-border hover:bg-secondary"
+              >
+                <MessageSquare className="w-5 h-5" />
+                Sign In
+              </Button>
+              <Button
+                size="lg"
+                variant="outline"
+                onClick={() => router.push("/signup")}
+                className="flex-1 gap-2 py-6 text-lg border-border hover:bg-secondary"
+              >
+                <Users className="w-5 h-5" />
+                Sign Up
+              </Button>
+            </div>
           </div>
 
           {/* Trust Badge */}

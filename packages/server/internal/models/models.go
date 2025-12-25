@@ -21,6 +21,45 @@ type User struct {
 	CreatedAt     time.Time  `json:"created_at"`
 	UpdatedAt     time.Time  `json:"updated_at"`
 	LastSeenAt    time.Time  `json:"last_seen_at"`
+	// Extended profile fields
+	Bio                *string    `json:"bio,omitempty"`
+	JobTitle           *string    `json:"job_title,omitempty"`
+	Company            *string    `json:"company,omitempty"`
+	Location           *string    `json:"location,omitempty"`
+	Website            *string    `json:"website,omitempty"`
+	RelationshipStatus *string    `json:"relationship_status,omitempty"`
+	Pronouns           *string    `json:"pronouns,omitempty"`
+	Birthday           *time.Time `json:"birthday,omitempty"`
+}
+
+// ProfileUpdateRequest represents a request to update user profile
+type ProfileUpdateRequest struct {
+	DisplayName        *string `json:"display_name,omitempty"`
+	AvatarURL          *string `json:"avatar_url,omitempty"`
+	Bio                *string `json:"bio,omitempty"`
+	JobTitle           *string `json:"job_title,omitempty"`
+	Company            *string `json:"company,omitempty"`
+	Location           *string `json:"location,omitempty"`
+	Website            *string `json:"website,omitempty"`
+	RelationshipStatus *string `json:"relationship_status,omitempty"`
+	Pronouns           *string `json:"pronouns,omitempty"`
+	Birthday           *string `json:"birthday,omitempty"` // ISO date string
+}
+
+// UserProfile represents the full public profile of a user
+type UserProfile struct {
+	ID                 uuid.UUID  `json:"id"`
+	Username           string     `json:"username"`
+	DisplayName        string     `json:"display_name"`
+	AvatarURL          *string    `json:"avatar_url,omitempty"`
+	Bio                *string    `json:"bio,omitempty"`
+	JobTitle           *string    `json:"job_title,omitempty"`
+	Company            *string    `json:"company,omitempty"`
+	Location           *string    `json:"location,omitempty"`
+	Website            *string    `json:"website,omitempty"`
+	RelationshipStatus *string    `json:"relationship_status,omitempty"`
+	Pronouns           *string    `json:"pronouns,omitempty"`
+	CreatedAt          time.Time  `json:"created_at"`
 }
 
 // Conversation represents a chat room, group, or channel
