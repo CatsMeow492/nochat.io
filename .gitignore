@@ -15,3 +15,17 @@ dist/
 .env
 .env.local
 .DS_Store
+
+# Certificates and secrets
+*.p8
+*.p12
+*.cer
+*.pem
+*.key
+*.mobileprovision
+*.certSigningRequest
+*.keystore
+*.jks
+
+# Playwright MCP (screenshots, test artifacts)
+.playwright-mcp/
