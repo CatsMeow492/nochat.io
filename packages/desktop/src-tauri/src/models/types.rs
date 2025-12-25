@@ -46,6 +46,7 @@ pub enum OAuthProvider {
     Google,
     Github,
     Apple,
+    Facebook,
 }
 
 impl std::fmt::Display for OAuthProvider {
@@ -54,6 +55,7 @@ impl std::fmt::Display for OAuthProvider {
             OAuthProvider::Google => write!(f, "google"),
             OAuthProvider::Github => write!(f, "github"),
             OAuthProvider::Apple => write!(f, "apple"),
+            OAuthProvider::Facebook => write!(f, "facebook"),
         }
     }
 }

@@ -142,6 +142,7 @@ pub async fn start_oauth(
         "google" => OAuthProvider::Google,
         "github" => OAuthProvider::Github,
         "apple" => OAuthProvider::Apple,
+        "facebook" => OAuthProvider::Facebook,
         _ => return Err(format!("Unknown OAuth provider: {}", provider)),
     };
 
