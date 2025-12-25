@@ -3,12 +3,13 @@
 import { useState, useEffect } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Eye, EyeOff, Lock, Mail, ArrowLeft, Loader2 } from "lucide-react";
+import { Eye, EyeOff, Lock, Mail, ArrowLeft, Loader2, Phone } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { useAuth } from "@/hooks";
 import { useAuthStore } from "@/stores";
+import { api } from "@/lib/api";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080";
 
@@ -40,6 +41,14 @@ function AppleIcon({ className }: { className?: string }) {
   );
 }
 
+function FacebookIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="#1877F2">
+      <path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/>
+    </svg>
+  );
+}
+
 export default function SignInPage() {
   const router = useRouter();
   const { signIn, isSigningIn, signInError, signInAnonymous, isSigningInAnonymous } = useAuth();
@@ -51,6 +60,15 @@ export default function SignInPage() {
   const [oauthLoading, setOauthLoading] = useState<string | null>(null);
   const [oauthError, setOauthError] = useState<string | null>(null);
   const [isDesktop, setIsDesktop] = useState(false);
+
+  // Phone auth state
+  const [authMode, setAuthMode] = useState<"email" | "phone">("email");
+  const [phoneNumber, setPhoneNumber] = useState("");
+  const [verificationCode, setVerificationCode] = useState("");
+  const [codeSent, setCodeSent] = useState(false);
+  const [phoneSending, setPhoneSending] = useState(false);
+  const [phoneVerifying, setPhoneVerifying] = useState(false);
+  const [phoneError, setPhoneError] = useState<string | null>(null);
 
   // Detect Tauri desktop app after hydration
   // In Tauri v2, __TAURI_INTERNALS__ is always present
@@ -143,7 +161,7 @@ export default function SignInPage() {
     signIn({ email, password });
   };
 
-  const handleOAuthSignIn = async (provider: "google" | "github" | "apple") => {
+  const handleOAuthSignIn = async (provider: "google" | "github" | "apple" | "facebook") => {
     setOauthError(null);
 
     if (isDesktop) {
@@ -161,6 +179,53 @@ export default function SignInPage() {
     } else {
       // Redirect to backend OAuth endpoint for web
       window.location.href = `${API_URL}/api/auth/oauth/${provider}`;
+    }
+  };
+
+  const handleSendCode = async () => {
+    if (!phoneNumber) {
+      setPhoneError("Please enter your phone number");
+      return;
+    }
+    setPhoneError(null);
+    setPhoneSending(true);
+    try {
+      await api.sendPhoneCode(phoneNumber);
+      setCodeSent(true);
+    } catch (err: any) {
+      setPhoneError(err.message || "Failed to send verification code");
+    } finally {
+      setPhoneSending(false);
+    }
+  };
+
+  const handleVerifyCode = async () => {
+    if (!verificationCode) {
+      setPhoneError("Please enter the verification code");
+      return;
+    }
+    setPhoneError(null);
+    setPhoneVerifying(true);
+    try {
+      const response = await api.verifyPhoneCode(phoneNumber, verificationCode);
+      // Update auth store and redirect
+      setUser(
+        {
+          id: response.user.id,
+          username: response.user.username,
+          email: response.user.email,
+          isAnonymous: response.user.is_anonymous ?? false,
+          walletAddress: response.user.wallet_address,
+          createdAt: response.user.created_at,
+        },
+        response.token
+      );
+      localStorage.setItem("token", response.token);
+      router.push("/");
+    } catch (err: any) {
+      setPhoneError(err.message || "Invalid verification code");
+    } finally {
+      setPhoneVerifying(false);
     }
   };
 
@@ -239,6 +304,20 @@ export default function SignInPage() {
                     )}
                     Continue with Apple
                   </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="w-full justify-start gap-3 h-12"
+                    onClick={() => handleOAuthSignIn("facebook")}
+                    disabled={!!oauthLoading}
+                  >
+                    {oauthLoading === "facebook" ? (
+                      <Loader2 className="w-5 h-5 animate-spin" />
+                    ) : (
+                      <FacebookIcon className="w-5 h-5" />
+                    )}
+                    Continue with Facebook
+                  </Button>
                 </div>
 
                 {/* Divider */}
@@ -276,6 +355,140 @@ export default function SignInPage() {
                     href="/signup"
                     className="text-primary hover:underline"
                   >
+                    Sign up
+                  </Link>
+                </p>
+              </div>
+            ) : authMode === "phone" ? (
+              /* Phone Auth Mode */
+              <div className="space-y-4">
+                {!codeSent ? (
+                  <>
+                    {/* Phone Number Input */}
+                    <div className="space-y-2">
+                      <label htmlFor="phone" className="text-sm font-medium">
+                        Phone Number
+                      </label>
+                      <div className="relative">
+                        <Phone className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                        <Input
+                          id="phone"
+                          type="tel"
+                          placeholder="+1 (555) 123-4567"
+                          value={phoneNumber}
+                          onChange={(e) => setPhoneNumber(e.target.value)}
+                          className="pl-10"
+                        />
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        Enter your phone number with country code
+                      </p>
+                    </div>
+
+                    {phoneError && (
+                      <p className="text-sm text-destructive">{phoneError}</p>
+                    )}
+
+                    <Button
+                      type="button"
+                      className="w-full"
+                      onClick={handleSendCode}
+                      disabled={phoneSending}
+                    >
+                      {phoneSending ? (
+                        <>
+                          <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                          Sending code...
+                        </>
+                      ) : (
+                        "Send Verification Code"
+                      )}
+                    </Button>
+                  </>
+                ) : (
+                  <>
+                    {/* Verification Code Input */}
+                    <div className="space-y-2">
+                      <label htmlFor="code" className="text-sm font-medium">
+                        Verification Code
+                      </label>
+                      <Input
+                        id="code"
+                        type="text"
+                        placeholder="123456"
+                        value={verificationCode}
+                        onChange={(e) => setVerificationCode(e.target.value)}
+                        className="text-center text-2xl tracking-widest"
+                        maxLength={6}
+                      />
+                      <p className="text-xs text-muted-foreground text-center">
+                        Enter the 6-digit code sent to {phoneNumber}
+                      </p>
+                    </div>
+
+                    {phoneError && (
+                      <p className="text-sm text-destructive">{phoneError}</p>
+                    )}
+
+                    <Button
+                      type="button"
+                      className="w-full"
+                      onClick={handleVerifyCode}
+                      disabled={phoneVerifying}
+                    >
+                      {phoneVerifying ? (
+                        <>
+                          <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                          Verifying...
+                        </>
+                      ) : (
+                        "Verify & Sign In"
+                      )}
+                    </Button>
+
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      className="w-full"
+                      onClick={() => {
+                        setCodeSent(false);
+                        setVerificationCode("");
+                        setPhoneError(null);
+                      }}
+                    >
+                      Use a different number
+                    </Button>
+                  </>
+                )}
+
+                {/* Divider */}
+                <div className="relative my-6">
+                  <div className="absolute inset-0 flex items-center">
+                    <div className="w-full border-t border-border" />
+                  </div>
+                  <div className="relative flex justify-center text-xs uppercase">
+                    <span className="bg-card px-2 text-muted-foreground">or</span>
+                  </div>
+                </div>
+
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="w-full gap-2"
+                  onClick={() => {
+                    setAuthMode("email");
+                    setPhoneError(null);
+                    setCodeSent(false);
+                  }}
+                >
+                  <Mail className="w-4 h-4" />
+                  Sign in with Email
+                </Button>
+
+                {/* Sign Up Link */}
+                <p className="mt-6 text-center text-sm text-muted-foreground">
+                  Don&apos;t have an account?{" "}
+                  <Link href="/signup" className="text-primary hover:underline">
                     Sign up
                   </Link>
                 </p>
@@ -367,7 +580,7 @@ export default function SignInPage() {
                   </div>
 
                   {/* OAuth Buttons */}
-                  <div className="grid grid-cols-3 gap-3">
+                  <div className="grid grid-cols-4 gap-2">
                     <Button
                       type="button"
                       variant="outline"
@@ -410,6 +623,20 @@ export default function SignInPage() {
                       )}
                       <span className="sr-only">Sign in with Apple</span>
                     </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="w-full"
+                      onClick={() => handleOAuthSignIn("facebook")}
+                      disabled={!!oauthLoading}
+                    >
+                      {oauthLoading === "facebook" ? (
+                        <Loader2 className="w-5 h-5 animate-spin" />
+                      ) : (
+                        <FacebookIcon className="w-5 h-5" />
+                      )}
+                      <span className="sr-only">Sign in with Facebook</span>
+                    </Button>
                   </div>
 
                   {/* Divider */}
@@ -421,6 +648,17 @@ export default function SignInPage() {
                       <span className="bg-card px-2 text-muted-foreground">or</span>
                     </div>
                   </div>
+
+                  {/* Phone Sign In */}
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="w-full gap-2"
+                    onClick={() => setAuthMode("phone")}
+                  >
+                    <Phone className="w-4 h-4" />
+                    Sign in with Phone
+                  </Button>
 
                   {/* Anonymous Sign In */}
                   <Button

@@ -27,25 +27,28 @@ var (
 
 // OAuthConfig holds configuration for OAuth providers
 type OAuthConfig struct {
-	GoogleClientID     string
-	GoogleClientSecret string
-	GitHubClientID     string
-	GitHubClientSecret string
-	AppleClientID      string
-	AppleClientSecret  string
-	AppleTeamID        string
-	AppleKeyID         string
-	RedirectBaseURL    string // Base URL for callbacks, e.g., "http://localhost:8080"
-	FrontendURL        string // Frontend URL for final redirect, e.g., "http://localhost:3000"
+	GoogleClientID       string
+	GoogleClientSecret   string
+	GitHubClientID       string
+	GitHubClientSecret   string
+	AppleClientID        string
+	AppleClientSecret    string
+	AppleTeamID          string
+	AppleKeyID           string
+	FacebookClientID     string
+	FacebookClientSecret string
+	RedirectBaseURL      string // Base URL for callbacks, e.g., "http://localhost:8080"
+	FrontendURL          string // Frontend URL for final redirect, e.g., "http://localhost:3000"
 }
 
 // OAuthProvider represents a supported OAuth provider
 type OAuthProvider string
 
 const (
-	ProviderGoogle OAuthProvider = "google"
-	ProviderGitHub OAuthProvider = "github"
-	ProviderApple  OAuthProvider = "apple"
+	ProviderGoogle   OAuthProvider = "google"
+	ProviderGitHub   OAuthProvider = "github"
+	ProviderApple    OAuthProvider = "apple"
+	ProviderFacebook OAuthProvider = "facebook"
 )
 
 // OAuthAccount represents a linked OAuth account
@@ -138,6 +141,18 @@ func (s *OAuthService) GetAuthURL(provider OAuthProvider, state string) (string,
 		}
 		return "https://appleid.apple.com/auth/authorize?" + params.Encode(), nil
 
+	case ProviderFacebook:
+		if s.config.FacebookClientID == "" {
+			return "", ErrOAuthProviderNotSupported
+		}
+		params := url.Values{
+			"client_id":    {s.config.FacebookClientID},
+			"redirect_uri": {redirectURI},
+			"scope":        {"email,public_profile"},
+			"state":        {state},
+		}
+		return "https://www.facebook.com/v18.0/dialog/oauth?" + params.Encode(), nil
+
 	default:
 		return "", ErrOAuthProviderNotSupported
 	}
@@ -154,6 +169,8 @@ func (s *OAuthService) ExchangeCode(ctx context.Context, provider OAuthProvider,
 		return s.exchangeGitHubCode(ctx, code, redirectURI)
 	case ProviderApple:
 		return s.exchangeAppleCode(ctx, code, redirectURI)
+	case ProviderFacebook:
+		return s.exchangeFacebookCode(ctx, code, redirectURI)
 	default:
 		return nil, ErrOAuthProviderNotSupported
 	}
@@ -388,6 +405,73 @@ func (s *OAuthService) exchangeAppleCode(ctx context.Context, code, redirectURI 
 		ID:    claims.Sub,
 		Email: claims.Email,
 		Name:  "", // Apple doesn't always provide name in the token
+	}, nil
+}
+
+func (s *OAuthService) exchangeFacebookCode(ctx context.Context, code, redirectURI string) (*OAuthUserInfo, error) {
+	// Exchange code for token
+	tokenURL := "https://graph.facebook.com/v18.0/oauth/access_token"
+	params := url.Values{
+		"client_id":     {s.config.FacebookClientID},
+		"client_secret": {s.config.FacebookClientSecret},
+		"code":          {code},
+		"redirect_uri":  {redirectURI},
+	}
+
+	resp, err := http.Get(tokenURL + "?" + params.Encode())
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrOAuthCodeExchange, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("%w: status %d, body: %s", ErrOAuthCodeExchange, resp.StatusCode, string(body))
+	}
+
+	var tokenResp struct {
+		AccessToken string `json:"access_token"`
+		TokenType   string `json:"token_type"`
+		ExpiresIn   int    `json:"expires_in"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&tokenResp); err != nil {
+		return nil, fmt.Errorf("%w: failed to decode token response: %v", ErrOAuthCodeExchange, err)
+	}
+
+	// Get user info from Facebook Graph API
+	userURL := "https://graph.facebook.com/v18.0/me?fields=id,name,email,picture.type(large)"
+	req, err := http.NewRequestWithContext(ctx, "GET", userURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrOAuthUserInfo, err)
+	}
+	req.Header.Set("Authorization", "Bearer "+tokenResp.AccessToken)
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	userResp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrOAuthUserInfo, err)
+	}
+	defer userResp.Body.Close()
+
+	var userInfo struct {
+		ID      string `json:"id"`
+		Name    string `json:"name"`
+		Email   string `json:"email"`
+		Picture struct {
+			Data struct {
+				URL string `json:"url"`
+			} `json:"data"`
+		} `json:"picture"`
+	}
+	if err := json.NewDecoder(userResp.Body).Decode(&userInfo); err != nil {
+		return nil, fmt.Errorf("%w: failed to decode user info: %v", ErrOAuthUserInfo, err)
+	}
+
+	return &OAuthUserInfo{
+		ID:        userInfo.ID,
+		Email:     userInfo.Email,
+		Name:      userInfo.Name,
+		AvatarURL: userInfo.Picture.Data.URL,
 	}, nil
 }
 

@@ -5,3 +5,15 @@ export { useMeeting } from "./use-meeting";
 export { useCrypto } from "./use-crypto";
 export { useNetworkStatus } from "./use-network-status";
 export { useDownload } from "./use-download";
+export {
+  useContacts,
+  usePendingRequests,
+  useInvites,
+  useInviteInfo,
+  useUserSettings,
+} from "./use-contacts";
+export {
+  usePhoneVerification,
+  useContactSync,
+  useDiscoveryNotifications,
+} from "./use-contact-sync";

@@ -13,6 +13,8 @@ type User struct {
 	Email         *string    `json:"email,omitempty"`
 	PasswordHash  *string    `json:"-"` // Never serialize
 	WalletAddress *string    `json:"wallet_address,omitempty"`
+	PhoneNumber   *string    `json:"phone_number,omitempty"`
+	PhoneVerified bool       `json:"phone_verified"`
 	DisplayName   string     `json:"display_name"`
 	AvatarURL     *string    `json:"avatar_url,omitempty"`
 	IsAnonymous   bool       `json:"is_anonymous"`
@@ -365,4 +367,111 @@ type SealedSenderStatusResponse struct {
 	HasDeliveryToken bool   `json:"has_delivery_token"`
 	KeyFingerprint   string `json:"key_fingerprint,omitempty"`
 	KeyVersion       int    `json:"key_version,omitempty"`
+}
+
+// ============================================================================
+// Contact & Invite Types
+// ============================================================================
+
+// ContactWithUser represents a contact with the associated user details
+type ContactWithUser struct {
+	Contact
+	ContactUser UserPublic `json:"contact_user"`
+}
+
+// UserPublic represents sanitized public user info
+type UserPublic struct {
+	ID          uuid.UUID `json:"id"`
+	Username    string    `json:"username"`
+	DisplayName string    `json:"display_name"`
+	AvatarURL   *string   `json:"avatar_url,omitempty"`
+}
+
+// InviteCode represents a shareable invite link
+type InviteCode struct {
+	ID        uuid.UUID  `json:"id"`
+	UserID    uuid.UUID  `json:"user_id"`
+	Code      string     `json:"code"`
+	MaxUses   *int       `json:"max_uses,omitempty"`
+	UseCount  int        `json:"use_count"`
+	ExpiresAt *time.Time `json:"expires_at,omitempty"`
+	IsActive  bool       `json:"is_active"`
+	CreatedAt time.Time  `json:"created_at"`
+	UpdatedAt time.Time  `json:"updated_at"`
+}
+
+// InviteInfo represents public info about an invite (for acceptance page)
+type InviteInfo struct {
+	Code          string     `json:"code"`
+	User          UserPublic `json:"user"`
+	IsValid       bool       `json:"is_valid"`
+	ExpiresAt     *time.Time `json:"expires_at,omitempty"`
+	RemainingUses *int       `json:"remaining_uses,omitempty"`
+}
+
+// UserSettings represents user preferences
+type UserSettings struct {
+	UserID                 uuid.UUID `json:"user_id"`
+	RequireContactApproval bool      `json:"require_contact_approval"`
+	UpdatedAt              time.Time `json:"updated_at"`
+}
+
+// ============================================================================
+// Phone Discovery Types
+// ============================================================================
+
+// PhoneVerification represents a pending phone verification
+type PhoneVerification struct {
+	ID          uuid.UUID  `json:"id"`
+	UserID      uuid.UUID  `json:"user_id"`
+	PhoneNumber string     `json:"phone_number"`
+	Code        string     `json:"-"` // Never expose code
+	ExpiresAt   time.Time  `json:"expires_at"`
+	VerifiedAt  *time.Time `json:"verified_at,omitempty"`
+	Attempts    int        `json:"attempts"`
+	CreatedAt   time.Time  `json:"created_at"`
+}
+
+// ContactHash represents an uploaded contact hash for discovery
+type ContactHash struct {
+	ID        uuid.UUID `json:"id"`
+	UserID    uuid.UUID `json:"user_id"`
+	PhoneHash string    `json:"phone_hash"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// DiscoveryNotification represents a pending discovery notification
+type DiscoveryNotification struct {
+	ID               uuid.UUID  `json:"id"`
+	UserID           uuid.UUID  `json:"user_id"`
+	DiscoveredUserID uuid.UUID  `json:"discovered_user_id"`
+	Notified         bool       `json:"notified"`
+	CreatedAt        time.Time  `json:"created_at"`
+	NotifiedAt       *time.Time `json:"notified_at,omitempty"`
+}
+
+// DiscoveredContact represents a discovered contact with user info
+type DiscoveredContact struct {
+	UserID      uuid.UUID `json:"user_id"`
+	Username    string    `json:"username"`
+	DisplayName string    `json:"display_name"`
+	AvatarURL   *string   `json:"avatar_url,omitempty"`
+	DiscoveredAt time.Time `json:"discovered_at"`
+}
+
+// ContactSyncResult represents the result of a contact sync operation
+type ContactSyncResult struct {
+	TotalUploaded   int                 `json:"total_uploaded"`
+	MatchesFound    int                 `json:"matches_found"`
+	NewMatches      int                 `json:"new_matches"`
+	DiscoveredUsers []DiscoveredContact `json:"discovered_users"`
+}
+
+// PhoneStatus represents the phone verification status for a user
+type PhoneStatus struct {
+	HasPhone       bool    `json:"has_phone"`
+	PhoneVerified  bool    `json:"phone_verified"`
+	PhoneLast4     *string `json:"phone_last_4,omitempty"` // Last 4 digits for display
+	ContactsSynced bool    `json:"contacts_synced"`
+	LastSyncedAt   *time.Time `json:"last_synced_at,omitempty"`
 }

@@ -368,6 +368,94 @@ func (s *Service) SearchUsers(ctx context.Context, query string, excludeUserID u
 	return users, nil
 }
 
+// GetUserByPhone retrieves a user by phone number
+func (s *Service) GetUserByPhone(ctx context.Context, phoneNumber string) (*models.User, error) {
+	var user models.User
+
+	query := `
+		SELECT id, username, email, display_name, wallet_address, avatar_url,
+		       is_anonymous, phone_number, phone_verified, created_at, updated_at, last_seen_at
+		FROM users
+		WHERE phone_number = $1
+	`
+
+	err := s.db.QueryRowContext(ctx, query, phoneNumber).Scan(
+		&user.ID, &user.Username, &user.Email, &user.DisplayName,
+		&user.WalletAddress, &user.AvatarURL, &user.IsAnonymous,
+		&user.PhoneNumber, &user.PhoneVerified,
+		&user.CreatedAt, &user.UpdatedAt, &user.LastSeenAt,
+	)
+
+	if err == sql.ErrNoRows {
+		return nil, ErrUserNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to query user: %w", err)
+	}
+
+	return &user, nil
+}
+
+// CreatePhoneUser creates a new user with a verified phone number
+func (s *Service) CreatePhoneUser(ctx context.Context, phoneNumber string) (*models.User, error) {
+	// Generate random username based on phone
+	randomBytes := make([]byte, 4)
+	if _, err := rand.Read(randomBytes); err != nil {
+		return nil, fmt.Errorf("failed to generate random username: %w", err)
+	}
+	username := "user_" + base64.URLEncoding.EncodeToString(randomBytes)[:6]
+
+	user := &models.User{
+		ID:            uuid.New(),
+		Username:      username,
+		PhoneNumber:   &phoneNumber,
+		PhoneVerified: true, // Already verified via OTP
+		DisplayName:   username,
+		IsAnonymous:   false,
+		CreatedAt:     time.Now(),
+		UpdatedAt:     time.Now(),
+		LastSeenAt:    time.Now(),
+	}
+
+	query := `
+		INSERT INTO users (id, username, phone_number, phone_verified, display_name, is_anonymous, created_at, updated_at, last_seen_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		RETURNING id, username, phone_number, phone_verified, display_name, is_anonymous, created_at, updated_at, last_seen_at
+	`
+
+	err := s.db.QueryRowContext(ctx, query,
+		user.ID, user.Username, user.PhoneNumber, user.PhoneVerified, user.DisplayName,
+		user.IsAnonymous, user.CreatedAt, user.UpdatedAt, user.LastSeenAt,
+	).Scan(&user.ID, &user.Username, &user.PhoneNumber, &user.PhoneVerified, &user.DisplayName,
+		&user.IsAnonymous, &user.CreatedAt, &user.UpdatedAt, &user.LastSeenAt)
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to create phone user: %w", err)
+	}
+
+	return user, nil
+}
+
+// FindOrCreatePhoneUser finds an existing user by phone or creates a new one
+func (s *Service) FindOrCreatePhoneUser(ctx context.Context, phoneNumber string) (*models.User, bool, error) {
+	// Try to find existing user
+	user, err := s.GetUserByPhone(ctx, phoneNumber)
+	if err == nil {
+		return user, false, nil // Existing user
+	}
+	if err != ErrUserNotFound {
+		return nil, false, err
+	}
+
+	// Create new user
+	user, err = s.CreatePhoneUser(ctx, phoneNumber)
+	if err != nil {
+		return nil, false, err
+	}
+
+	return user, true, nil // New user created
+}
+
 func stringPtr(s string) *string {
 	return &s
 }

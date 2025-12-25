@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -17,8 +19,10 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/gorilla/websocket"
 	"gitlab.com/secp/services/backend/internal/auth"
+	"gitlab.com/secp/services/backend/internal/contacts"
 	"gitlab.com/secp/services/backend/internal/crypto"
 	"gitlab.com/secp/services/backend/internal/db"
+	"gitlab.com/secp/services/backend/internal/discovery"
 	"gitlab.com/secp/services/backend/internal/messaging"
 	"gitlab.com/secp/services/backend/internal/models"
 	"gitlab.com/secp/services/backend/internal/ratelimit"
@@ -47,6 +51,8 @@ type Server struct {
 	storageService       *storage.Service
 	cryptoService        *crypto.Service
 	transparencyService  *transparency.Service
+	contactsService      *contacts.Service
+	discoveryService     *discovery.Service
 	rateLimiter          *ratelimit.Limiter
 	iceHandler           *handlers.IceHandler
 }
@@ -71,16 +77,18 @@ func main() {
 
 	// Initialize OAuth service
 	oauthConfig := auth.OAuthConfig{
-		GoogleClientID:     os.Getenv("GOOGLE_CLIENT_ID"),
-		GoogleClientSecret: os.Getenv("GOOGLE_CLIENT_SECRET"),
-		GitHubClientID:     os.Getenv("GITHUB_CLIENT_ID"),
-		GitHubClientSecret: os.Getenv("GITHUB_CLIENT_SECRET"),
-		AppleClientID:      os.Getenv("APPLE_CLIENT_ID"),
-		AppleClientSecret:  os.Getenv("APPLE_CLIENT_SECRET"),
-		AppleTeamID:        os.Getenv("APPLE_TEAM_ID"),
-		AppleKeyID:         os.Getenv("APPLE_KEY_ID"),
-		RedirectBaseURL:    getEnvOrDefault("OAUTH_REDIRECT_BASE_URL", "http://localhost:8080"),
-		FrontendURL:        getEnvOrDefault("FRONTEND_URL", "http://localhost:3000"),
+		GoogleClientID:       os.Getenv("GOOGLE_CLIENT_ID"),
+		GoogleClientSecret:   os.Getenv("GOOGLE_CLIENT_SECRET"),
+		GitHubClientID:       os.Getenv("GITHUB_CLIENT_ID"),
+		GitHubClientSecret:   os.Getenv("GITHUB_CLIENT_SECRET"),
+		AppleClientID:        os.Getenv("APPLE_CLIENT_ID"),
+		AppleClientSecret:    os.Getenv("APPLE_CLIENT_SECRET"),
+		AppleTeamID:          os.Getenv("APPLE_TEAM_ID"),
+		AppleKeyID:           os.Getenv("APPLE_KEY_ID"),
+		FacebookClientID:     os.Getenv("FACEBOOK_CLIENT_ID"),
+		FacebookClientSecret: os.Getenv("FACEBOOK_CLIENT_SECRET"),
+		RedirectBaseURL:      getEnvOrDefault("OAUTH_REDIRECT_BASE_URL", "http://localhost:8080"),
+		FrontendURL:          getEnvOrDefault("FRONTEND_URL", "http://localhost:3000"),
 	}
 	oauthService := auth.NewOAuthService(database.Postgres, oauthConfig)
 	signalingService := signaling.NewService(database.Redis)
@@ -91,6 +99,8 @@ func main() {
 		storageService = nil
 	}
 	cryptoService := crypto.NewService(database.Postgres)
+	contactsService := contacts.NewService(database.Postgres)
+	discoveryService := discovery.NewService(database.Postgres)
 
 	// Initialize transparency service (for key transparency / auditable key directory)
 	transparencyService, err := transparency.NewService(database.Postgres, database.Redis)
@@ -121,6 +131,8 @@ func main() {
 		storageService:       storageService,
 		cryptoService:        cryptoService,
 		transparencyService:  transparencyService,
+		contactsService:      contactsService,
+		discoveryService:     discoveryService,
 		rateLimiter:          rateLimiter,
 		iceHandler:           iceHandler,
 	}
@@ -187,6 +199,10 @@ func (s *Server) setupRouter() *mux.Router {
 	router.HandleFunc("/api/auth/oauth/{provider}", s.handleOAuthInitiate).Methods("GET")
 	router.HandleFunc("/api/auth/oauth/{provider}/callback", s.handleOAuthCallback).Methods("GET", "POST")
 
+	// Phone auth routes (passwordless SMS OTP)
+	router.HandleFunc("/api/auth/phone/send-code", s.handlePhoneAuthSendCode).Methods("POST")
+	router.HandleFunc("/api/auth/phone/verify", s.handlePhoneAuthVerify).Methods("POST")
+
 	// User routes (protected)
 	router.HandleFunc("/api/users/me", s.authMiddleware(s.handleGetCurrentUser)).Methods("GET")
 	router.HandleFunc("/api/users/search", s.authMiddleware(s.handleSearchUsers)).Methods("GET")
@@ -213,7 +229,35 @@ func (s *Server) setupRouter() *mux.Router {
 
 	// Contacts routes (protected)
 	router.HandleFunc("/api/contacts", s.authMiddleware(s.handleGetContacts)).Methods("GET")
-	router.HandleFunc("/api/contacts", s.authMiddleware(s.handleAddContact)).Methods("POST")
+	router.HandleFunc("/api/contacts", s.authMiddleware(s.handleSendContactRequest)).Methods("POST")
+	router.HandleFunc("/api/contacts/pending", s.authMiddleware(s.handleGetPendingRequests)).Methods("GET")
+	router.HandleFunc("/api/contacts/pending/count", s.authMiddleware(s.handleGetPendingCount)).Methods("GET")
+	router.HandleFunc("/api/contacts/{id}", s.authMiddleware(s.handleUpdateContact)).Methods("PUT")
+	router.HandleFunc("/api/contacts/{id}", s.authMiddleware(s.handleDeleteContact)).Methods("DELETE")
+
+	// Invite routes (protected except for public info)
+	router.HandleFunc("/api/contacts/invites", s.authMiddleware(s.handleCreateInvite)).Methods("POST")
+	router.HandleFunc("/api/contacts/invites", s.authMiddleware(s.handleGetUserInvites)).Methods("GET")
+	router.HandleFunc("/api/contacts/invites/{id}", s.authMiddleware(s.handleDeactivateInvite)).Methods("DELETE")
+	router.HandleFunc("/api/contacts/invite/{code}", s.handleGetInviteInfo).Methods("GET") // Public endpoint
+	router.HandleFunc("/api/contacts/invite/{code}/accept", s.authMiddleware(s.handleAcceptInvite)).Methods("POST")
+
+	// User settings routes (protected)
+	router.HandleFunc("/api/users/settings", s.authMiddleware(s.handleGetUserSettings)).Methods("GET")
+	router.HandleFunc("/api/users/settings", s.authMiddleware(s.handleUpdateUserSettings)).Methods("PUT")
+
+	// Phone verification routes (protected)
+	router.HandleFunc("/api/phone/send-code", s.authMiddleware(s.handleSendPhoneCode)).Methods("POST")
+	router.HandleFunc("/api/phone/verify", s.authMiddleware(s.handleVerifyPhoneCode)).Methods("POST")
+	router.HandleFunc("/api/phone", s.authMiddleware(s.handleRemovePhone)).Methods("DELETE")
+	router.HandleFunc("/api/phone/status", s.authMiddleware(s.handleGetPhoneStatus)).Methods("GET")
+
+	// Contact discovery routes (protected)
+	router.HandleFunc("/api/contacts/sync", s.authMiddleware(s.handleSyncContacts)).Methods("POST")
+	router.HandleFunc("/api/contacts/discovered", s.authMiddleware(s.handleGetDiscoveredContacts)).Methods("GET")
+	router.HandleFunc("/api/contacts/hashes", s.authMiddleware(s.handleClearContactHashes)).Methods("DELETE")
+	router.HandleFunc("/api/notifications/discovery", s.authMiddleware(s.handleGetDiscoveryNotifications)).Methods("GET")
+	router.HandleFunc("/api/notifications/discovery/read", s.authMiddleware(s.handleMarkDiscoveryRead)).Methods("POST")
 
 	// Crypto/E2EE routes (protected)
 	router.HandleFunc("/api/crypto/keys/identity", s.authMiddleware(s.handleUploadIdentityKey)).Methods("POST")
@@ -729,16 +773,573 @@ func (s *Server) handleGetAttachment(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(attachment)
 }
 
-// Contacts Handlers (placeholder)
+// Contacts Handlers
 
 func (s *Server) handleGetContacts(w http.ResponseWriter, r *http.Request) {
-	// TODO: Implement contacts listing
-	json.NewEncoder(w).Encode([]interface{}{})
+	userID := r.Context().Value("userID").(uuid.UUID)
+	status := r.URL.Query().Get("status") // Optional: pending, accepted, blocked
+
+	contacts, err := s.contactsService.GetContacts(r.Context(), userID, status)
+	if err != nil {
+		log.Printf("[Contacts] Failed to get contacts: %v", err)
+		http.Error(w, "Failed to get contacts", http.StatusInternalServerError)
+		return
+	}
+
+	if contacts == nil {
+		contacts = []models.ContactWithUser{}
+	}
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"contacts": contacts,
+	})
 }
 
-func (s *Server) handleAddContact(w http.ResponseWriter, r *http.Request) {
-	// TODO: Implement add contact
-	w.WriteHeader(http.StatusNotImplemented)
+func (s *Server) handleSendContactRequest(w http.ResponseWriter, r *http.Request) {
+	userID := r.Context().Value("userID").(uuid.UUID)
+
+	var req struct {
+		UserID string `json:"user_id"` // Target user ID
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request", http.StatusBadRequest)
+		return
+	}
+
+	targetUserID, err := uuid.Parse(req.UserID)
+	if err != nil {
+		http.Error(w, "Invalid user ID", http.StatusBadRequest)
+		return
+	}
+
+	contact, err := s.contactsService.SendRequest(r.Context(), userID, targetUserID)
+	if err != nil {
+		switch err {
+		case contacts.ErrCannotAddSelf:
+			http.Error(w, "Cannot add yourself as a contact", http.StatusBadRequest)
+		case contacts.ErrContactExists:
+			http.Error(w, "Contact already exists", http.StatusConflict)
+		default:
+			log.Printf("[Contacts] Failed to send request: %v", err)
+			http.Error(w, "Failed to send contact request", http.StatusInternalServerError)
+		}
+		return
+	}
+
+	json.NewEncoder(w).Encode(contact)
+}
+
+func (s *Server) handleGetPendingRequests(w http.ResponseWriter, r *http.Request) {
+	userID := r.Context().Value("userID").(uuid.UUID)
+
+	requests, err := s.contactsService.GetPendingRequests(r.Context(), userID)
+	if err != nil {
+		log.Printf("[Contacts] Failed to get pending requests: %v", err)
+		http.Error(w, "Failed to get pending requests", http.StatusInternalServerError)
+		return
+	}
+
+	if requests == nil {
+		requests = []models.ContactWithUser{}
+	}
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"requests": requests,
+	})
+}
+
+func (s *Server) handleGetPendingCount(w http.ResponseWriter, r *http.Request) {
+	userID := r.Context().Value("userID").(uuid.UUID)
+
+	count, err := s.contactsService.GetPendingCount(r.Context(), userID)
+	if err != nil {
+		log.Printf("[Contacts] Failed to get pending count: %v", err)
+		http.Error(w, "Failed to get pending count", http.StatusInternalServerError)
+		return
+	}
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"count": count,
+	})
+}
+
+func (s *Server) handleUpdateContact(w http.ResponseWriter, r *http.Request) {
+	userID := r.Context().Value("userID").(uuid.UUID)
+	vars := mux.Vars(r)
+
+	contactID, err := uuid.Parse(vars["id"])
+	if err != nil {
+		http.Error(w, "Invalid contact ID", http.StatusBadRequest)
+		return
+	}
+
+	var req struct {
+		Status string `json:"status"` // accepted, blocked
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request", http.StatusBadRequest)
+		return
+	}
+
+	if req.Status != "accepted" && req.Status != "blocked" {
+		http.Error(w, "Status must be 'accepted' or 'blocked'", http.StatusBadRequest)
+		return
+	}
+
+	if err := s.contactsService.UpdateStatus(r.Context(), contactID, userID, req.Status); err != nil {
+		switch err {
+		case contacts.ErrContactNotFound:
+			http.Error(w, "Contact not found", http.StatusNotFound)
+		case contacts.ErrUnauthorized:
+			http.Error(w, "Unauthorized", http.StatusForbidden)
+		default:
+			log.Printf("[Contacts] Failed to update contact: %v", err)
+			http.Error(w, "Failed to update contact", http.StatusInternalServerError)
+		}
+		return
+	}
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+	})
+}
+
+func (s *Server) handleDeleteContact(w http.ResponseWriter, r *http.Request) {
+	userID := r.Context().Value("userID").(uuid.UUID)
+	vars := mux.Vars(r)
+
+	contactID, err := uuid.Parse(vars["id"])
+	if err != nil {
+		http.Error(w, "Invalid contact ID", http.StatusBadRequest)
+		return
+	}
+
+	if err := s.contactsService.Delete(r.Context(), contactID, userID); err != nil {
+		switch err {
+		case contacts.ErrContactNotFound:
+			http.Error(w, "Contact not found", http.StatusNotFound)
+		case contacts.ErrUnauthorized:
+			http.Error(w, "Unauthorized", http.StatusForbidden)
+		default:
+			log.Printf("[Contacts] Failed to delete contact: %v", err)
+			http.Error(w, "Failed to delete contact", http.StatusInternalServerError)
+		}
+		return
+	}
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+	})
+}
+
+// Invite Handlers
+
+func (s *Server) handleCreateInvite(w http.ResponseWriter, r *http.Request) {
+	userID := r.Context().Value("userID").(uuid.UUID)
+
+	var req struct {
+		MaxUses   *int   `json:"max_uses,omitempty"`
+		ExpiresIn *int64 `json:"expires_in,omitempty"` // Duration in seconds
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && err.Error() != "EOF" {
+		http.Error(w, "Invalid request", http.StatusBadRequest)
+		return
+	}
+
+	var expiresIn *time.Duration
+	if req.ExpiresIn != nil {
+		d := time.Duration(*req.ExpiresIn) * time.Second
+		expiresIn = &d
+	}
+
+	invite, err := s.contactsService.CreateInvite(r.Context(), userID, req.MaxUses, expiresIn)
+	if err != nil {
+		log.Printf("[Contacts] Failed to create invite: %v", err)
+		http.Error(w, "Failed to create invite", http.StatusInternalServerError)
+		return
+	}
+
+	json.NewEncoder(w).Encode(invite)
+}
+
+func (s *Server) handleGetUserInvites(w http.ResponseWriter, r *http.Request) {
+	userID := r.Context().Value("userID").(uuid.UUID)
+
+	invites, err := s.contactsService.GetUserInvites(r.Context(), userID)
+	if err != nil {
+		log.Printf("[Contacts] Failed to get invites: %v", err)
+		http.Error(w, "Failed to get invites", http.StatusInternalServerError)
+		return
+	}
+
+	if invites == nil {
+		invites = []models.InviteCode{}
+	}
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"invites": invites,
+	})
+}
+
+func (s *Server) handleDeactivateInvite(w http.ResponseWriter, r *http.Request) {
+	userID := r.Context().Value("userID").(uuid.UUID)
+	vars := mux.Vars(r)
+
+	inviteID, err := uuid.Parse(vars["id"])
+	if err != nil {
+		http.Error(w, "Invalid invite ID", http.StatusBadRequest)
+		return
+	}
+
+	if err := s.contactsService.DeactivateInvite(r.Context(), inviteID, userID); err != nil {
+		if err == contacts.ErrInviteNotFound {
+			http.Error(w, "Invite not found", http.StatusNotFound)
+		} else {
+			log.Printf("[Contacts] Failed to deactivate invite: %v", err)
+			http.Error(w, "Failed to deactivate invite", http.StatusInternalServerError)
+		}
+		return
+	}
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+	})
+}
+
+func (s *Server) handleGetInviteInfo(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	code := vars["code"]
+
+	info, err := s.contactsService.GetInviteInfo(r.Context(), code)
+	if err != nil {
+		if err == contacts.ErrInviteNotFound {
+			http.Error(w, "Invite not found", http.StatusNotFound)
+		} else {
+			log.Printf("[Contacts] Failed to get invite info: %v", err)
+			http.Error(w, "Failed to get invite info", http.StatusInternalServerError)
+		}
+		return
+	}
+
+	json.NewEncoder(w).Encode(info)
+}
+
+func (s *Server) handleAcceptInvite(w http.ResponseWriter, r *http.Request) {
+	userID := r.Context().Value("userID").(uuid.UUID)
+	vars := mux.Vars(r)
+	code := vars["code"]
+
+	contact, err := s.contactsService.AcceptInvite(r.Context(), code, userID)
+	if err != nil {
+		switch err {
+		case contacts.ErrInviteNotFound:
+			http.Error(w, "Invite not found", http.StatusNotFound)
+		case contacts.ErrInviteExpired:
+			http.Error(w, "Invite has expired", http.StatusGone)
+		case contacts.ErrInviteMaxUses:
+			http.Error(w, "Invite has reached maximum uses", http.StatusGone)
+		case contacts.ErrCannotAddSelf:
+			http.Error(w, "Cannot add yourself as a contact", http.StatusBadRequest)
+		default:
+			log.Printf("[Contacts] Failed to accept invite: %v", err)
+			http.Error(w, "Failed to accept invite", http.StatusInternalServerError)
+		}
+		return
+	}
+
+	json.NewEncoder(w).Encode(contact)
+}
+
+// User Settings Handlers
+
+func (s *Server) handleGetUserSettings(w http.ResponseWriter, r *http.Request) {
+	userID := r.Context().Value("userID").(uuid.UUID)
+
+	settings, err := s.contactsService.GetSettings(r.Context(), userID)
+	if err != nil {
+		log.Printf("[Settings] Failed to get settings: %v", err)
+		http.Error(w, "Failed to get settings", http.StatusInternalServerError)
+		return
+	}
+
+	json.NewEncoder(w).Encode(settings)
+}
+
+func (s *Server) handleUpdateUserSettings(w http.ResponseWriter, r *http.Request) {
+	userID := r.Context().Value("userID").(uuid.UUID)
+
+	var req struct {
+		RequireContactApproval *bool `json:"require_contact_approval,omitempty"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request", http.StatusBadRequest)
+		return
+	}
+
+	// Get current settings
+	currentSettings, err := s.contactsService.GetSettings(r.Context(), userID)
+	if err != nil {
+		log.Printf("[Settings] Failed to get current settings: %v", err)
+		http.Error(w, "Failed to update settings", http.StatusInternalServerError)
+		return
+	}
+
+	// Apply updates
+	requireApproval := currentSettings.RequireContactApproval
+	if req.RequireContactApproval != nil {
+		requireApproval = *req.RequireContactApproval
+	}
+
+	settings, err := s.contactsService.UpdateSettings(r.Context(), userID, requireApproval)
+	if err != nil {
+		log.Printf("[Settings] Failed to update settings: %v", err)
+		http.Error(w, "Failed to update settings", http.StatusInternalServerError)
+		return
+	}
+
+	json.NewEncoder(w).Encode(settings)
+}
+
+// ============================================================================
+// Phone Verification Handlers
+// ============================================================================
+
+// handleSendPhoneCode sends an SMS verification code to the given phone number
+func (s *Server) handleSendPhoneCode(w http.ResponseWriter, r *http.Request) {
+	userID := r.Context().Value("userID").(uuid.UUID)
+
+	var req struct {
+		PhoneNumber string `json:"phone_number"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if req.PhoneNumber == "" {
+		http.Error(w, "Phone number is required", http.StatusBadRequest)
+		return
+	}
+
+	verification, err := s.discoveryService.SendVerificationCode(r.Context(), userID, req.PhoneNumber)
+	if err != nil {
+		switch err {
+		case discovery.ErrPhoneInUse:
+			http.Error(w, "Phone number already in use", http.StatusConflict)
+		case discovery.ErrRateLimitExceeded:
+			http.Error(w, "Too many verification attempts, try again later", http.StatusTooManyRequests)
+		default:
+			log.Printf("[Phone] Failed to send verification: %v", err)
+			http.Error(w, "Failed to send verification code", http.StatusInternalServerError)
+		}
+		return
+	}
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success":    true,
+		"expires_at": verification.ExpiresAt,
+	})
+}
+
+// handleVerifyPhoneCode verifies the SMS code
+func (s *Server) handleVerifyPhoneCode(w http.ResponseWriter, r *http.Request) {
+	userID := r.Context().Value("userID").(uuid.UUID)
+
+	var req struct {
+		Code string `json:"code"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if req.Code == "" {
+		http.Error(w, "Verification code is required", http.StatusBadRequest)
+		return
+	}
+
+	err := s.discoveryService.VerifyCode(r.Context(), userID, req.Code)
+	if err != nil {
+		switch err {
+		case discovery.ErrVerificationNotFound:
+			http.Error(w, "No pending verification found", http.StatusNotFound)
+		case discovery.ErrVerificationExpired:
+			http.Error(w, "Verification code expired", http.StatusGone)
+		case discovery.ErrInvalidCode:
+			http.Error(w, "Invalid verification code", http.StatusBadRequest)
+		case discovery.ErrTooManyAttempts:
+			http.Error(w, "Too many attempts, request a new code", http.StatusTooManyRequests)
+		default:
+			log.Printf("[Phone] Failed to verify code: %v", err)
+			http.Error(w, "Failed to verify code", http.StatusInternalServerError)
+		}
+		return
+	}
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success":        true,
+		"phone_verified": true,
+	})
+}
+
+// handleRemovePhone removes the phone number from the user's account
+func (s *Server) handleRemovePhone(w http.ResponseWriter, r *http.Request) {
+	userID := r.Context().Value("userID").(uuid.UUID)
+
+	if err := s.discoveryService.RemovePhoneNumber(r.Context(), userID); err != nil {
+		log.Printf("[Phone] Failed to remove phone: %v", err)
+		http.Error(w, "Failed to remove phone number", http.StatusInternalServerError)
+		return
+	}
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+	})
+}
+
+// handleGetPhoneStatus returns the phone verification status
+func (s *Server) handleGetPhoneStatus(w http.ResponseWriter, r *http.Request) {
+	userID := r.Context().Value("userID").(uuid.UUID)
+
+	status, err := s.discoveryService.GetPhoneStatus(r.Context(), userID)
+	if err != nil {
+		log.Printf("[Phone] Failed to get status: %v", err)
+		http.Error(w, "Failed to get phone status", http.StatusInternalServerError)
+		return
+	}
+
+	json.NewEncoder(w).Encode(status)
+}
+
+// ============================================================================
+// Contact Discovery Handlers
+// ============================================================================
+
+// handleSyncContacts uploads hashed contacts and returns matches
+func (s *Server) handleSyncContacts(w http.ResponseWriter, r *http.Request) {
+	userID := r.Context().Value("userID").(uuid.UUID)
+
+	var req struct {
+		PhoneHashes []string `json:"phone_hashes"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if len(req.PhoneHashes) == 0 {
+		http.Error(w, "Phone hashes are required", http.StatusBadRequest)
+		return
+	}
+
+	result, err := s.discoveryService.SyncContacts(r.Context(), userID, req.PhoneHashes)
+	if err != nil {
+		switch err {
+		case discovery.ErrTooManyHashes:
+			http.Error(w, "Too many contact hashes (max 100 per sync)", http.StatusBadRequest)
+		default:
+			log.Printf("[Discovery] Failed to sync contacts: %v", err)
+			http.Error(w, "Failed to sync contacts", http.StatusInternalServerError)
+		}
+		return
+	}
+
+	json.NewEncoder(w).Encode(result)
+}
+
+// handleGetDiscoveredContacts returns all discovered contacts
+func (s *Server) handleGetDiscoveredContacts(w http.ResponseWriter, r *http.Request) {
+	userID := r.Context().Value("userID").(uuid.UUID)
+
+	contacts, err := s.discoveryService.GetDiscoveredContacts(r.Context(), userID)
+	if err != nil {
+		log.Printf("[Discovery] Failed to get discovered contacts: %v", err)
+		http.Error(w, "Failed to get discovered contacts", http.StatusInternalServerError)
+		return
+	}
+
+	if contacts == nil {
+		contacts = []models.DiscoveredContact{}
+	}
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"discovered": contacts,
+	})
+}
+
+// handleClearContactHashes removes all uploaded contact hashes
+func (s *Server) handleClearContactHashes(w http.ResponseWriter, r *http.Request) {
+	userID := r.Context().Value("userID").(uuid.UUID)
+
+	if err := s.discoveryService.ClearUploadedContacts(r.Context(), userID); err != nil {
+		log.Printf("[Discovery] Failed to clear hashes: %v", err)
+		http.Error(w, "Failed to clear contact hashes", http.StatusInternalServerError)
+		return
+	}
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+	})
+}
+
+// handleGetDiscoveryNotifications returns pending discovery notifications
+func (s *Server) handleGetDiscoveryNotifications(w http.ResponseWriter, r *http.Request) {
+	userID := r.Context().Value("userID").(uuid.UUID)
+
+	notifications, err := s.discoveryService.GetPendingNotifications(r.Context(), userID)
+	if err != nil {
+		log.Printf("[Discovery] Failed to get notifications: %v", err)
+		http.Error(w, "Failed to get notifications", http.StatusInternalServerError)
+		return
+	}
+
+	if notifications == nil {
+		notifications = []models.DiscoveredContact{}
+	}
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"notifications": notifications,
+	})
+}
+
+// handleMarkDiscoveryRead marks discovery notifications as read
+func (s *Server) handleMarkDiscoveryRead(w http.ResponseWriter, r *http.Request) {
+	userID := r.Context().Value("userID").(uuid.UUID)
+
+	var req struct {
+		NotificationIDs []string `json:"notification_ids"` // Empty = mark all as read
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && err.Error() != "EOF" {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	var ids []uuid.UUID
+	for _, idStr := range req.NotificationIDs {
+		id, err := uuid.Parse(idStr)
+		if err != nil {
+			continue
+		}
+		ids = append(ids, id)
+	}
+
+	if err := s.discoveryService.MarkNotificationsRead(r.Context(), userID, ids); err != nil {
+		log.Printf("[Discovery] Failed to mark notifications: %v", err)
+		http.Error(w, "Failed to mark notifications as read", http.StatusInternalServerError)
+		return
+	}
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+	})
 }
 
 // Crypto Handlers - PQC Key Management for E2EE
@@ -1591,16 +2192,28 @@ func (s *Server) handleOAuthInitiate(w http.ResponseWriter, r *http.Request) {
 		provider = auth.ProviderGitHub
 	case "apple":
 		provider = auth.ProviderApple
+	case "facebook":
+		provider = auth.ProviderFacebook
 	default:
 		http.Error(w, "Unsupported OAuth provider", http.StatusBadRequest)
 		return
 	}
 
 	// Generate state for CSRF protection
-	state, err := s.oauthService.GenerateState()
+	baseState, err := s.oauthService.GenerateState()
 	if err != nil {
 		http.Error(w, "Failed to generate state", http.StatusInternalServerError)
 		return
+	}
+
+	// Check if this is a desktop app request and encode in state
+	// State format: {random}:desktop or {random}:web
+	isDesktop := r.URL.Query().Get("desktop") == "true"
+	var state string
+	if isDesktop {
+		state = baseState + ":desktop"
+	} else {
+		state = baseState + ":web"
 	}
 
 	// Store state in a cookie (expires in 10 minutes)
@@ -1610,11 +2223,11 @@ func (s *Server) handleOAuthInitiate(w http.ResponseWriter, r *http.Request) {
 		Path:     "/",
 		MaxAge:   600,
 		HttpOnly: true,
-		Secure:   r.TLS != nil,
+		Secure:   r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https",
 		SameSite: http.SameSiteLaxMode,
 	})
 
-	// Get auth URL and redirect
+	// Get auth URL and redirect (pass full state including desktop flag)
 	authURL, err := s.oauthService.GetAuthURL(provider, state)
 	if err != nil {
 		if err == auth.ErrOAuthProviderNotSupported {
@@ -1640,6 +2253,8 @@ func (s *Server) handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 		provider = auth.ProviderGitHub
 	case "apple":
 		provider = auth.ProviderApple
+	case "facebook":
+		provider = auth.ProviderFacebook
 	default:
 		http.Error(w, "Unsupported OAuth provider", http.StatusBadRequest)
 		return
@@ -1660,6 +2275,10 @@ func (s *Server) handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 		state = r.URL.Query().Get("state")
 	}
 
+	// Parse state early to determine if this is a desktop request
+	// State format: {random}:desktop or {random}:web
+	isDesktop := strings.HasSuffix(state, ":desktop")
+
 	if code == "" {
 		// Check for error response
 		errorMsg := r.URL.Query().Get("error")
@@ -1667,17 +2286,17 @@ func (s *Server) handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 			errorMsg = r.FormValue("error")
 		}
 		if errorMsg != "" {
-			s.redirectToFrontendWithError(w, r, "OAuth error: "+errorMsg)
+			s.redirectToFrontendWithError(w, r, "OAuth error: "+errorMsg, isDesktop)
 			return
 		}
-		s.redirectToFrontendWithError(w, r, "Missing authorization code")
+		s.redirectToFrontendWithError(w, r, "Missing authorization code", isDesktop)
 		return
 	}
 
 	// Verify state from cookie
 	stateCookie, err := r.Cookie("oauth_state")
 	if err != nil || stateCookie.Value != state {
-		s.redirectToFrontendWithError(w, r, "Invalid OAuth state")
+		s.redirectToFrontendWithError(w, r, "Invalid OAuth state", isDesktop)
 		return
 	}
 
@@ -1694,7 +2313,7 @@ func (s *Server) handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 	userInfo, err := s.oauthService.ExchangeCode(r.Context(), provider, code)
 	if err != nil {
 		log.Printf("[OAuth] Failed to exchange code: %v", err)
-		s.redirectToFrontendWithError(w, r, "Failed to authenticate with "+providerStr)
+		s.redirectToFrontendWithError(w, r, "Failed to authenticate with "+providerStr, isDesktop)
 		return
 	}
 
@@ -1702,7 +2321,7 @@ func (s *Server) handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 	user, err := s.oauthService.FindOrCreateUser(r.Context(), provider, userInfo)
 	if err != nil {
 		log.Printf("[OAuth] Failed to find/create user: %v", err)
-		s.redirectToFrontendWithError(w, r, "Failed to create account")
+		s.redirectToFrontendWithError(w, r, "Failed to create account", isDesktop)
 		return
 	}
 
@@ -1710,24 +2329,195 @@ func (s *Server) handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 	token, err := s.authService.GenerateSessionToken(user.ID)
 	if err != nil {
 		log.Printf("[OAuth] Failed to generate token: %v", err)
-		s.redirectToFrontendWithError(w, r, "Failed to create session")
+		s.redirectToFrontendWithError(w, r, "Failed to create session", isDesktop)
 		return
 	}
 
 	// Redirect to frontend with token
-	s.redirectToFrontendWithToken(w, r, token)
+	s.redirectToFrontendWithToken(w, r, token, isDesktop)
 }
 
-func (s *Server) redirectToFrontendWithToken(w http.ResponseWriter, r *http.Request, token string) {
+func (s *Server) redirectToFrontendWithToken(w http.ResponseWriter, r *http.Request, token string, isDesktop bool) {
+	if isDesktop {
+		// For desktop apps, we need to use an HTML page with JavaScript to trigger the custom URL scheme.
+		// HTTP redirects to custom URL schemes don't work in browsers - they get stuck loading.
+		redirectURL := fmt.Sprintf("nochat://auth/callback?token=%s", token)
+		log.Printf("[OAuth] Redirecting to desktop app: %s", redirectURL)
+
+		html := fmt.Sprintf(`<!DOCTYPE html>
+<html>
+<head>
+    <title>Redirecting to NoChat...</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            margin: 0;
+            background: #0a0a0a;
+            color: #fff;
+        }
+        .container { text-align: center; padding: 2rem; }
+        h1 { margin-bottom: 1rem; }
+        p { color: #888; margin-bottom: 2rem; }
+        a { color: #7c3aed; text-decoration: none; }
+        a:hover { text-decoration: underline; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Redirecting to NoChat...</h1>
+        <p>If the app doesn't open automatically, <a href="%s">click here</a>.</p>
+    </div>
+    <script>
+        window.location.href = %q;
+    </script>
+</body>
+</html>`, redirectURL, redirectURL)
+
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(html))
+		return
+	}
+
 	frontendURL := getEnvOrDefault("FRONTEND_URL", "http://localhost:3000")
 	redirectURL := fmt.Sprintf("%s/oauth/callback?token=%s", frontendURL, token)
 	http.Redirect(w, r, redirectURL, http.StatusTemporaryRedirect)
 }
 
-func (s *Server) redirectToFrontendWithError(w http.ResponseWriter, r *http.Request, errorMsg string) {
+func (s *Server) redirectToFrontendWithError(w http.ResponseWriter, r *http.Request, errorMsg string, isDesktop bool) {
+	if isDesktop {
+		// For desktop apps, use an HTML page with JavaScript to trigger the custom URL scheme.
+		redirectURL := fmt.Sprintf("nochat://auth/callback?error=%s", url.QueryEscape(errorMsg))
+		log.Printf("[OAuth] Redirecting to desktop app with error: %s", errorMsg)
+
+		html := fmt.Sprintf(`<!DOCTYPE html>
+<html>
+<head>
+    <title>Redirecting to NoChat...</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            margin: 0;
+            background: #0a0a0a;
+            color: #fff;
+        }
+        .container { text-align: center; padding: 2rem; }
+        h1 { margin-bottom: 1rem; }
+        p { color: #888; margin-bottom: 2rem; }
+        a { color: #7c3aed; text-decoration: none; }
+        a:hover { text-decoration: underline; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Redirecting to NoChat...</h1>
+        <p>If the app doesn't open automatically, <a href="%s">click here</a>.</p>
+    </div>
+    <script>
+        window.location.href = %q;
+    </script>
+</body>
+</html>`, redirectURL, redirectURL)
+
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(html))
+		return
+	}
+
 	frontendURL := getEnvOrDefault("FRONTEND_URL", "http://localhost:3000")
-	redirectURL := fmt.Sprintf("%s/oauth/callback?error=%s", frontendURL, errorMsg)
+	redirectURL := fmt.Sprintf("%s/oauth/callback?error=%s", frontendURL, url.QueryEscape(errorMsg))
 	http.Redirect(w, r, redirectURL, http.StatusTemporaryRedirect)
+}
+
+// ============================================================================
+// Phone Auth Handlers (Passwordless SMS OTP)
+// ============================================================================
+
+func (s *Server) handlePhoneAuthSendCode(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		PhoneNumber string `json:"phone_number"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if req.PhoneNumber == "" {
+		http.Error(w, "Phone number is required", http.StatusBadRequest)
+		return
+	}
+
+	// Use discovery service to send verification code via Twilio
+	err := s.discoveryService.SendAuthCode(r.Context(), req.PhoneNumber)
+	if err != nil {
+		log.Printf("[PhoneAuth] Failed to send verification code: %v", err)
+		http.Error(w, "Failed to send verification code", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"message": "Verification code sent",
+	})
+}
+
+func (s *Server) handlePhoneAuthVerify(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		PhoneNumber string `json:"phone_number"`
+		Code        string `json:"code"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if req.PhoneNumber == "" || req.Code == "" {
+		http.Error(w, "Phone number and code are required", http.StatusBadRequest)
+		return
+	}
+
+	// Verify the code using discovery service
+	err := s.discoveryService.VerifyAuthCode(r.Context(), req.PhoneNumber, req.Code)
+	if err != nil {
+		log.Printf("[PhoneAuth] Failed to verify code: %v", err)
+		http.Error(w, "Invalid or expired verification code", http.StatusUnauthorized)
+		return
+	}
+
+	// Find or create user by phone number
+	user, isNewUser, err := s.authService.FindOrCreatePhoneUser(r.Context(), req.PhoneNumber)
+	if err != nil {
+		log.Printf("[PhoneAuth] Failed to find/create user: %v", err)
+		http.Error(w, "Failed to create account", http.StatusInternalServerError)
+		return
+	}
+
+	// Generate session token
+	token, err := s.authService.GenerateSessionToken(user.ID)
+	if err != nil {
+		log.Printf("[PhoneAuth] Failed to generate token: %v", err)
+		http.Error(w, "Failed to create session", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"user":        user,
+		"token":       token,
+		"is_new_user": isNewUser,
+	})
 }
 
 // ============================================================================

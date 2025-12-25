@@ -100,6 +100,27 @@ class ApiClient {
     });
   }
 
+  // Phone auth
+  async sendPhoneCode(phoneNumber: string) {
+    return this.request<{ success: boolean; message: string }>(
+      "/api/auth/phone/send-code",
+      {
+        method: "POST",
+        body: JSON.stringify({ phone_number: phoneNumber }),
+      }
+    );
+  }
+
+  async verifyPhoneCode(phoneNumber: string, code: string) {
+    return this.request<{ user: any; token: string; is_new_user: boolean }>(
+      "/api/auth/phone/verify",
+      {
+        method: "POST",
+        body: JSON.stringify({ phone_number: phoneNumber, code }),
+      }
+    );
+  }
+
   async getMe() {
     return this.request<{ user: any }>("/api/users/me");
   }
@@ -426,6 +447,269 @@ class ApiClient {
       last_verified_root: string;
       updated_at: string;
     }>(`/api/transparency/client-state?device_id=${encodeURIComponent(deviceId)}`);
+  }
+
+  // ============================================================================
+  // Contacts endpoints
+  // ============================================================================
+
+  async getContacts(status?: "pending" | "accepted" | "blocked") {
+    const params = status ? `?status=${status}` : "";
+    return this.request<{
+      contacts: Array<{
+        id: string;
+        user_id: string;
+        contact_user_id: string;
+        status: string;
+        created_at: string;
+        updated_at: string;
+        contact_user: {
+          id: string;
+          username: string;
+          display_name: string;
+          avatar_url?: string;
+        };
+      }>;
+    }>(`/api/contacts${params}`);
+  }
+
+  async sendContactRequest(userId: string) {
+    return this.request<{
+      id: string;
+      user_id: string;
+      contact_user_id: string;
+      status: string;
+      created_at: string;
+    }>("/api/contacts", {
+      method: "POST",
+      body: JSON.stringify({ user_id: userId }),
+    });
+  }
+
+  async getPendingRequests() {
+    return this.request<{
+      requests: Array<{
+        id: string;
+        user_id: string;
+        contact_user_id: string;
+        status: string;
+        created_at: string;
+        updated_at: string;
+        contact_user: {
+          id: string;
+          username: string;
+          display_name: string;
+          avatar_url?: string;
+        };
+      }>;
+    }>("/api/contacts/pending");
+  }
+
+  async getPendingRequestCount() {
+    return this.request<{ count: number }>("/api/contacts/pending/count");
+  }
+
+  async updateContact(contactId: string, status: "accepted" | "blocked") {
+    return this.request<{ success: boolean }>(`/api/contacts/${contactId}`, {
+      method: "PUT",
+      body: JSON.stringify({ status }),
+    });
+  }
+
+  async deleteContact(contactId: string) {
+    return this.request<{ success: boolean }>(`/api/contacts/${contactId}`, {
+      method: "DELETE",
+    });
+  }
+
+  // ============================================================================
+  // Invite endpoints
+  // ============================================================================
+
+  async createInvite(options?: { max_uses?: number; expires_in?: number }) {
+    return this.request<{
+      id: string;
+      user_id: string;
+      code: string;
+      max_uses?: number;
+      use_count: number;
+      expires_at?: string;
+      is_active: boolean;
+      created_at: string;
+    }>("/api/contacts/invites", {
+      method: "POST",
+      body: JSON.stringify(options || {}),
+    });
+  }
+
+  async getUserInvites() {
+    return this.request<{
+      invites: Array<{
+        id: string;
+        user_id: string;
+        code: string;
+        max_uses?: number;
+        use_count: number;
+        expires_at?: string;
+        is_active: boolean;
+        created_at: string;
+      }>;
+    }>("/api/contacts/invites");
+  }
+
+  async deactivateInvite(inviteId: string) {
+    return this.request<{ success: boolean }>(`/api/contacts/invites/${inviteId}`, {
+      method: "DELETE",
+    });
+  }
+
+  async getInviteInfo(code: string) {
+    return this.request<{
+      code: string;
+      user: {
+        id: string;
+        username: string;
+        display_name: string;
+        avatar_url?: string;
+      };
+      is_valid: boolean;
+      expires_at?: string;
+      remaining_uses?: number;
+    }>(`/api/contacts/invite/${code}`);
+  }
+
+  async acceptInvite(code: string) {
+    return this.request<{
+      id: string;
+      user_id: string;
+      contact_user_id: string;
+      status: string;
+      created_at: string;
+    }>(`/api/contacts/invite/${code}/accept`, {
+      method: "POST",
+    });
+  }
+
+  // ============================================================================
+  // User settings endpoints
+  // ============================================================================
+
+  async getUserSettings() {
+    return this.request<{
+      user_id: string;
+      require_contact_approval: boolean;
+      updated_at: string;
+    }>("/api/users/settings");
+  }
+
+  async updateUserSettings(settings: { require_contact_approval?: boolean }) {
+    return this.request<{
+      user_id: string;
+      require_contact_approval: boolean;
+      updated_at: string;
+    }>("/api/users/settings", {
+      method: "PUT",
+      body: JSON.stringify(settings),
+    });
+  }
+
+  // ============================================================================
+  // Phone Verification endpoints
+  // ============================================================================
+
+  async sendPhoneVerificationCode(phoneNumber: string) {
+    return this.request<{
+      success: boolean;
+      expires_at: string;
+    }>("/api/phone/send-code", {
+      method: "POST",
+      body: JSON.stringify({ phone_number: phoneNumber }),
+    });
+  }
+
+  async verifyPhone(code: string) {
+    return this.request<{
+      success: boolean;
+      phone_verified: boolean;
+    }>("/api/phone/verify", {
+      method: "POST",
+      body: JSON.stringify({ code }),
+    });
+  }
+
+  async removePhoneNumber() {
+    return this.request<{ success: boolean }>("/api/phone", {
+      method: "DELETE",
+    });
+  }
+
+  async getPhoneStatus() {
+    return this.request<{
+      has_phone: boolean;
+      phone_verified: boolean;
+      phone_last_4?: string;
+      contacts_synced: boolean;
+      last_synced_at?: string;
+    }>("/api/phone/status");
+  }
+
+  // ============================================================================
+  // Contact Discovery endpoints
+  // ============================================================================
+
+  async syncContacts(phoneHashes: string[]) {
+    return this.request<{
+      total_uploaded: number;
+      matches_found: number;
+      new_matches: number;
+      discovered_users: Array<{
+        user_id: string;
+        username: string;
+        display_name: string;
+        avatar_url?: string;
+        discovered_at: string;
+      }>;
+    }>("/api/contacts/sync", {
+      method: "POST",
+      body: JSON.stringify({ phone_hashes: phoneHashes }),
+    });
+  }
+
+  async getDiscoveredContacts() {
+    return this.request<{
+      discovered: Array<{
+        user_id: string;
+        username: string;
+        display_name: string;
+        avatar_url?: string;
+        discovered_at: string;
+      }>;
+    }>("/api/contacts/discovered");
+  }
+
+  async clearContactHashes() {
+    return this.request<{ success: boolean }>("/api/contacts/hashes", {
+      method: "DELETE",
+    });
+  }
+
+  async getDiscoveryNotifications() {
+    return this.request<{
+      notifications: Array<{
+        user_id: string;
+        username: string;
+        display_name: string;
+        avatar_url?: string;
+        discovered_at: string;
+      }>;
+    }>("/api/notifications/discovery");
+  }
+
+  async markDiscoveryNotificationsRead(notificationIds?: string[]) {
+    return this.request<{ success: boolean }>("/api/notifications/discovery/read", {
+      method: "POST",
+      body: JSON.stringify({ notification_ids: notificationIds || [] }),
+    });
   }
 }
 
