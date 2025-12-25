@@ -191,22 +191,6 @@ export default function LandingPage() {
             <span className="text-xl font-bold gradient-text">NoChat</span>
           </div>
 
-          {/* Nav Links */}
-          <nav className="hidden md:flex items-center gap-6 text-sm">
-            <a href="#features" className="text-muted-foreground hover:text-foreground transition-colors">
-              Features
-            </a>
-            <a href="#security" className="text-muted-foreground hover:text-foreground transition-colors">
-              Security
-            </a>
-            <a href="#download" className="text-muted-foreground hover:text-foreground transition-colors">
-              Download
-            </a>
-            <Link href="/signin" className="text-muted-foreground hover:text-foreground transition-colors">
-              Sign In
-            </Link>
-          </nav>
-
           {/* Download Button */}
           <div className="flex items-center gap-3">
             <Button
