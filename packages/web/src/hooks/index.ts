@@ -6,6 +6,8 @@ export { useCrypto } from "./use-crypto";
 export { useNetworkStatus } from "./use-network-status";
 export { useDownload } from "./use-download";
 export { useAppUpdate } from "./use-app-update";
+export { useHaptics } from "./use-haptics";
+export { useShare } from "./use-share";
 export {
   useContacts,
   usePendingRequests,

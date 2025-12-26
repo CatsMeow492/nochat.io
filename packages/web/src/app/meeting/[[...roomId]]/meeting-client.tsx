@@ -23,7 +23,7 @@ import {
   Link2,
 } from "lucide-react";
 import { useMeeting } from "@/hooks/use-meeting";
-import { useAuth } from "@/hooks";
+import { useAuth, useHaptics, useShare } from "@/hooks";
 import { api } from "@/lib/api";
 import { useAuthStore } from "@/stores";
 import { cn } from "@/lib/utils";
@@ -271,6 +271,8 @@ export default function MeetingClient() {
 
   const { user, isLoading: isAuthLoading } = useAuth();
   const { setUser } = useAuthStore();
+  const { lightImpact, mediumImpact, successNotification, errorNotification } = useHaptics();
+  const { shareMeetingLink } = useShare();
   const [copied, setCopied] = useState(false);
   const [hasJoined, setHasJoined] = useState(false);
   const [isJoining, setIsJoining] = useState(false);
@@ -296,15 +298,28 @@ export default function MeetingClient() {
     ? `${window.location.origin}/meeting/${roomId}`
     : "";
 
-  const copyLink = async () => {
-    if (!meetingLink) return;
-    await navigator.clipboard.writeText(meetingLink);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+  const handleShareLink = async () => {
+    if (!meetingLink || !roomId) return;
+
+    // Haptic feedback
+    await lightImpact();
+
+    // Use native share sheet on mobile, clipboard fallback on web
+    const result = await shareMeetingLink(roomId, meetingLink);
+
+    if (result.shared) {
+      await successNotification();
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
   };
 
   const handleJoin = async () => {
     if (!roomId) return;
+
+    // Haptic feedback on join button tap
+    await mediumImpact();
+
     setIsJoining(true);
     try {
       let userId = user?.id;
@@ -328,17 +343,30 @@ export default function MeetingClient() {
       }
       // Pass userId directly to avoid race conditions with store updates
       await connect(userId);
+      await successNotification();
       setHasJoined(true);
     } catch (error) {
       console.error("Failed to join meeting:", error);
+      await errorNotification();
     } finally {
       setIsJoining(false);
     }
   };
 
-  const handleLeave = () => {
+  const handleLeave = async () => {
+    await mediumImpact();
     disconnect();
     router.push("/");
+  };
+
+  const handleToggleMute = async () => {
+    await lightImpact();
+    toggleMute();
+  };
+
+  const handleToggleVideo = async () => {
+    await lightImpact();
+    toggleVideo();
   };
 
   // Show loading while checking auth
@@ -402,7 +430,7 @@ export default function MeetingClient() {
                     <Button
                       variant="outline"
                       size="icon"
-                      onClick={copyLink}
+                      onClick={handleShareLink}
                       className="shrink-0"
                     >
                       {copied ? (
@@ -476,7 +504,7 @@ export default function MeetingClient() {
             </div>
             <Tooltip>
               <TooltipTrigger asChild>
-                <Button variant="ghost" size="icon" onClick={copyLink}>
+                <Button variant="ghost" size="icon" onClick={handleShareLink}>
                   {copied ? (
                     <Check className="w-4 h-4 text-green-500" />
                   ) : (
@@ -563,7 +591,7 @@ export default function MeetingClient() {
                 variant={isMuted ? "destructive" : "secondary"}
                 size="icon"
                 className="w-12 h-12 rounded-full"
-                onClick={toggleMute}
+                onClick={handleToggleMute}
               >
                 {isMuted ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
               </Button>
@@ -578,7 +606,7 @@ export default function MeetingClient() {
                 variant={isVideoOff ? "destructive" : "secondary"}
                 size="icon"
                 className="w-12 h-12 rounded-full"
-                onClick={toggleVideo}
+                onClick={handleToggleVideo}
               >
                 {isVideoOff ? <VideoOff className="w-5 h-5" /> : <Video className="w-5 h-5" />}
               </Button>
@@ -631,7 +659,7 @@ export default function MeetingClient() {
             <Card className="px-4 py-3 flex items-center gap-3">
               <div className="w-2 h-2 rounded-full bg-yellow-500 animate-pulse" />
               <span className="text-sm">Waiting for others to join...</span>
-              <Button variant="ghost" size="sm" onClick={copyLink} className="gap-1">
+              <Button variant="ghost" size="sm" onClick={handleShareLink} className="gap-1">
                 <Copy className="w-3 h-3" />
                 Share
               </Button>

@@ -25,7 +25,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { useAuth, useDownload } from "@/hooks";
+import { useAuth, useDownload, useHaptics } from "@/hooks";
 import { api } from "@/lib/api";
 import { useAuthStore } from "@/stores";
 import {
@@ -59,9 +59,11 @@ export default function LandingPage() {
   const router = useRouter();
   const { isAuthVerified, isLoading, hasHydrated, token } = useAuth();
   const { setUser } = useAuthStore();
+  const { lightImpact, mediumImpact, successNotification, errorNotification } = useHaptics();
   const [isStartingMeeting, setIsStartingMeeting] = useState(false);
   const [joinDialogOpen, setJoinDialogOpen] = useState(false);
   const [meetingCode, setMeetingCode] = useState("");
+  const [meetingError, setMeetingError] = useState<string | null>(null);
   const meetingRedirectRef = useRef(false);
   const [isTauri, setIsTauri] = useState(false);
 
@@ -94,7 +96,11 @@ export default function LandingPage() {
 
   // Start a new meeting as anonymous user
   const handleStartMeeting = async () => {
+    // Haptic feedback on button tap
+    await mediumImpact();
+
     setIsStartingMeeting(true);
+    setMeetingError(null);
     meetingRedirectRef.current = true; // Prevent redirect to /chat
     try {
       // Create anonymous user
@@ -112,11 +118,18 @@ export default function LandingPage() {
         response.token
       );
 
+      // Success haptic feedback
+      await successNotification();
+
       // Generate room ID and redirect
       const roomId = generateMeetingCode();
       router.push(`/meeting/${roomId}`);
     } catch (error) {
       console.error("Failed to start meeting:", error);
+      // Error haptic feedback
+      await errorNotification();
+      const errorMessage = error instanceof Error ? error.message : "Failed to start meeting. Please try again.";
+      setMeetingError(errorMessage);
       meetingRedirectRef.current = false;
       setIsStartingMeeting(false);
     }
@@ -125,6 +138,9 @@ export default function LandingPage() {
   // Join an existing meeting
   const handleJoinMeeting = async () => {
     if (!meetingCode.trim()) return;
+
+    // Haptic feedback on button tap
+    await mediumImpact();
 
     meetingRedirectRef.current = true; // Prevent redirect to /chat
     try {
@@ -143,10 +159,15 @@ export default function LandingPage() {
         response.token
       );
 
+      // Success haptic feedback
+      await successNotification();
+
       // Navigate to the meeting
       router.push(`/meeting/${meetingCode.trim().toUpperCase()}`);
     } catch (error) {
       console.error("Failed to join meeting:", error);
+      // Error haptic feedback
+      await errorNotification();
       meetingRedirectRef.current = false;
     }
   };
@@ -263,11 +284,18 @@ export default function LandingPage() {
 
           {/* CTA Buttons */}
           <div className="flex flex-col gap-4 justify-center pt-4 px-2 max-w-md mx-auto">
+            {/* Error Message */}
+            {meetingError && (
+              <div className="p-3 rounded-lg bg-destructive/10 border border-destructive/20 text-destructive text-sm text-center">
+                {meetingError}
+              </div>
+            )}
+
             {/* Start Meeting - Primary Action */}
             <Button
               size="lg"
               onClick={handleStartMeeting}
-              disabled={isStartingMeeting || isLoading}
+              disabled={isStartingMeeting}
               className="gap-2 bg-primary hover:bg-primary/90 text-primary-foreground px-6 sm:px-8 py-6 text-lg w-full"
             >
               <Video className="w-5 h-5" />
@@ -278,7 +306,10 @@ export default function LandingPage() {
             <Button
               size="lg"
               variant="outline"
-              onClick={() => setJoinDialogOpen(true)}
+              onClick={() => {
+                lightImpact();
+                setJoinDialogOpen(true);
+              }}
               className="gap-2 px-6 sm:px-8 py-6 text-lg border-border hover:bg-secondary w-full"
             >
               <Users className="w-5 h-5" />
@@ -297,7 +328,10 @@ export default function LandingPage() {
               <Button
                 size="lg"
                 variant="outline"
-                onClick={() => router.push("/signin")}
+                onClick={() => {
+                  lightImpact();
+                  router.push("/signin");
+                }}
                 className="flex-1 gap-2 py-6 text-lg border-border hover:bg-secondary"
               >
                 <MessageSquare className="w-5 h-5" />
@@ -306,7 +340,10 @@ export default function LandingPage() {
               <Button
                 size="lg"
                 variant="outline"
-                onClick={() => router.push("/signup")}
+                onClick={() => {
+                  lightImpact();
+                  router.push("/signup");
+                }}
                 className="flex-1 gap-2 py-6 text-lg border-border hover:bg-secondary"
               >
                 <Users className="w-5 h-5" />

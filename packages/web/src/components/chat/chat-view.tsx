@@ -23,7 +23,7 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { VirtualizedMessageList, VirtualizedMessageListRef } from "./virtualized-message-list";
-import { useMessages, useConversations } from "@/hooks";
+import { useMessages, useConversations, useHaptics } from "@/hooks";
 import { useAuthStore, useChatStore } from "@/stores";
 import { cn } from "@/lib/utils";
 
@@ -36,6 +36,7 @@ export function ChatView({ conversationId }: ChatViewProps) {
   const { user } = useAuthStore();
   const { typingUsers, setCurrentRoom } = useChatStore();
   const { deleteConversation, isDeleting } = useConversations();
+  const { lightImpact, successNotification, errorNotification } = useHaptics();
   const {
     messages,
     isLoading,
@@ -90,15 +91,26 @@ export function ChatView({ conversationId }: ChatViewProps) {
     inputRef.current?.focus();
   }, [conversationId]);
 
-  const handleSubmit = (e: FormEvent) => {
+  const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     if (!newMessage.trim() || isSending) return;
 
-    sendMessage({
-      content: newMessage,
-      encrypted: isEncrypted,
-    });
-    setNewMessage("");
+    // Haptic feedback on send
+    await lightImpact();
+
+    try {
+      await sendMessage({
+        content: newMessage,
+        encrypted: isEncrypted,
+      });
+      // Success haptic feedback
+      await successNotification();
+      setNewMessage("");
+    } catch (error) {
+      // Error haptic feedback
+      await errorNotification();
+      console.error("Failed to send message:", error);
+    }
   };
 
   const typing = typingUsers.get(conversationId);
