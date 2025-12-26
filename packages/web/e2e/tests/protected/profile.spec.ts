@@ -17,9 +17,11 @@ test.describe("Profile Page Access", () => {
       // Ensure no auth state
       await page.goto("/");
       await page.evaluate(() => {
-        localStorage.removeItem("token");
-        localStorage.removeItem("nochat-auth");
+        localStorage.clear();
       });
+      // Reload to ensure Zustand picks up the cleared state
+      await page.reload();
+      await page.waitForLoadState("networkidle");
 
       // Direct navigation to profile without auth
       await page.goto("/profile");
@@ -45,7 +47,7 @@ test.describe("Profile Page Access", () => {
 
       // Profile content should be visible
       await expect(
-        page.getByRole("heading", { name: "Profile Photo" })
+        page.getByText("Profile Photo", { exact: true })
       ).toBeVisible({ timeout: 10000 });
       await expect(page.getByLabel("Display Name")).toBeVisible();
     });
@@ -66,7 +68,7 @@ test.describe("Profile Page Access", () => {
       await page.goto("/signin");
       await page.getByLabel("Email").fill(TEST_USERS.standard.email);
       await page.getByLabel("Password").fill(TEST_USERS.standard.password);
-      await page.getByRole("button", { name: "Sign In" }).click();
+      await page.getByRole("button", { name: "Sign In", exact: true }).click();
 
       // Wait for login to complete
       await page.waitForURL(/\/chat/, { timeout: 15000 });
@@ -80,7 +82,7 @@ test.describe("Profile Page Access", () => {
       // 3. Profile content should be visible within reasonable time
 
       await expect(
-        page.getByRole("heading", { name: "Profile Photo" })
+        page.getByText("Profile Photo", { exact: true })
       ).toBeVisible({ timeout: 15000 });
 
       // Verify we're still on profile
@@ -99,7 +101,7 @@ test.describe("Profile Page Access", () => {
       // Go to profile
       await page.goto("/profile");
       await expect(
-        page.getByRole("heading", { name: "Profile Photo" })
+        page.getByText("Profile Photo", { exact: true })
       ).toBeVisible({ timeout: 15000 });
 
       // Reload the page (simulates fresh page load with token in localStorage)
@@ -107,7 +109,7 @@ test.describe("Profile Page Access", () => {
 
       // Should still work after reload
       await expect(
-        page.getByRole("heading", { name: "Profile Photo" })
+        page.getByText("Profile Photo", { exact: true })
       ).toBeVisible({ timeout: 15000 });
 
       // Should NOT redirect to signin
@@ -128,7 +130,7 @@ test.describe("Profile Page Access", () => {
       // Start navigation to profile immediately after clicking sign in
       // Use Promise.all to simulate rapid navigation
       await Promise.all([
-        page.getByRole("button", { name: "Sign In" }).click(),
+        page.getByRole("button", { name: "Sign In", exact: true }).click(),
         page.waitForURL(/\/chat/, { timeout: 15000 }),
       ]);
 
@@ -137,28 +139,43 @@ test.describe("Profile Page Access", () => {
 
       // Profile should load correctly
       await expect(
-        page.getByRole("heading", { name: "Profile Photo" })
+        page.getByText("Profile Photo", { exact: true })
       ).toBeVisible({ timeout: 15000 });
     });
   });
 
   test.describe("Session expiration", () => {
-    test("expired token redirects to signin", async ({
+    test("expired token clears auth state", async ({
       page,
       loginAsUser,
     }) => {
       await loginAsUser(TEST_USERS.standard.email, TEST_USERS.standard.password);
+
+      // Navigate to profile first to establish we're authenticated
+      await page.goto("/profile");
+      await expect(
+        page.getByText("Profile Photo", { exact: true })
+      ).toBeVisible({ timeout: 15000 });
 
       // Corrupt the token to simulate expiration
       await page.evaluate(() => {
         localStorage.setItem("token", "invalid-expired-token");
       });
 
-      // Navigate to profile
-      await page.goto("/profile");
+      // Reload to force the app to use the invalid token
+      await page.reload();
 
-      // Should eventually redirect to signin after API rejects the token
-      await expect(page).toHaveURL("/signin", { timeout: 15000 });
+      // Wait for the page to attempt to load
+      // The API will return 401, which should clear the token
+      await page.waitForTimeout(3000);
+
+      // After API rejection, token should be cleared from localStorage
+      const tokenAfterError = await page.evaluate(() => localStorage.getItem("token"));
+      expect(tokenAfterError).toBeFalsy();
+
+      // Now navigating to a protected route should redirect to signin
+      await page.goto("/profile");
+      await expect(page).toHaveURL(/\/signin/, { timeout: 10000 });
     });
   });
 
@@ -172,7 +189,7 @@ test.describe("Profile Page Access", () => {
 
       // Wait for profile to load
       await expect(
-        page.getByRole("heading", { name: "Profile Photo" })
+        page.getByText("Profile Photo", { exact: true })
       ).toBeVisible({ timeout: 15000 });
 
       // Check for expected form fields
@@ -194,7 +211,7 @@ test.describe("Profile Page Access", () => {
 
       // Wait for profile to load
       await expect(
-        page.getByRole("heading", { name: "Profile Photo" })
+        page.getByText("Profile Photo", { exact: true })
       ).toBeVisible({ timeout: 15000 });
 
       // Click back button

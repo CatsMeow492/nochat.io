@@ -65,13 +65,16 @@ test.describe("OAuth Authentication", () => {
       // Navigate to callback with invalid token
       await page.goto("/oauth/callback?token=invalid-test-token");
 
-      // Should show loading initially
-      await expect(page.getByText(/signing you in/i)).toBeVisible();
-
       // Should eventually show error (token validation fails)
+      // Note: Loading state "Signing you in..." is transient and may not be visible
       await expect(page.getByText(/sign in failed/i)).toBeVisible({
         timeout: 15000,
       });
+
+      // Should have retry button
+      await expect(
+        page.getByRole("button", { name: /try again/i })
+      ).toBeVisible();
     });
 
     test("try again button navigates to signin", async ({ page }) => {

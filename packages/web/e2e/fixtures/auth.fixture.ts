@@ -29,8 +29,8 @@ async function loginViaUI(page: Page, email: string, password: string) {
   // Fill in password
   await page.getByLabel("Password").fill(password);
 
-  // Click sign in button
-  await page.getByRole("button", { name: "Sign In" }).click();
+  // Click sign in button (exact match to avoid matching "Sign in with..." buttons)
+  await page.getByRole("button", { name: "Sign In", exact: true }).click();
 
   // Wait for redirect to home or chat
   await page.waitForURL(/\/(chat)?$/, { timeout: 15000 });

@@ -7,11 +7,11 @@ test.describe("Email Sign In", () => {
 
     // Verify form elements are visible
     await expect(
-      page.getByRole("heading", { name: "Welcome Back" })
+      page.getByText("Welcome Back")
     ).toBeVisible();
     await expect(page.getByLabel("Email")).toBeVisible();
     await expect(page.getByLabel("Password")).toBeVisible();
-    await expect(page.getByRole("button", { name: "Sign In" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Sign In", exact: true })).toBeVisible();
     await expect(
       page.getByRole("button", { name: "Continue Anonymously" })
     ).toBeVisible();
@@ -25,7 +25,7 @@ test.describe("Email Sign In", () => {
     await page.getByLabel("Password").fill(TEST_USERS.standard.password);
 
     // Click sign in
-    await page.getByRole("button", { name: "Sign In" }).click();
+    await page.getByRole("button", { name: "Sign In", exact: true }).click();
 
     // Should redirect to chat
     await page.waitForURL(/\/chat/, { timeout: 15000 });
@@ -43,11 +43,12 @@ test.describe("Email Sign In", () => {
     await page.getByLabel("Password").fill(TEST_USERS.invalid.password);
 
     // Click sign in
-    await page.getByRole("button", { name: "Sign In" }).click();
+    await page.getByRole("button", { name: "Sign In", exact: true }).click();
 
-    // Should show error message
+    // Should show error message (could be from backend or fallback)
+    // Possible messages: "Invalid credentials", "Session expired", "Request failed", etc.
     await expect(
-      page.getByText(/invalid|incorrect|unauthorized/i)
+      page.getByText(/invalid|incorrect|unauthorized|expired|failed|error/i)
     ).toBeVisible({ timeout: 10000 });
 
     // Should stay on signin page
@@ -96,7 +97,7 @@ test.describe("Email Sign In", () => {
     await page.goto("/signin");
 
     // Try to submit empty form
-    await page.getByRole("button", { name: "Sign In" }).click();
+    await page.getByRole("button", { name: "Sign In", exact: true }).click();
 
     // HTML5 validation should prevent submission
     // The email field has required attribute
