@@ -29,6 +29,20 @@ function formatBytes(bytes: number): string {
   return (bytes / (1024 * 1024)).toFixed(1) + " MB";
 }
 
+// Compare semantic versions (returns positive if a > b, negative if a < b, 0 if equal)
+function compareVersions(a: string, b: string): number {
+  const partsA = a.split(".").map((n) => parseInt(n, 10) || 0);
+  const partsB = b.split(".").map((n) => parseInt(n, 10) || 0);
+
+  for (let i = 0; i < Math.max(partsA.length, partsB.length); i++) {
+    const partA = partsA[i] || 0;
+    const partB = partsB[i] || 0;
+    if (partA > partB) return 1;
+    if (partA < partB) return -1;
+  }
+  return 0;
+}
+
 export interface DownloadInfo {
   version: string;
   macos?: { url: string; size: string };
@@ -121,9 +135,17 @@ export function useDownload() {
         }
 
         const releases: Release[] = await response.json();
-        const desktopRelease = releases.find((r) =>
-          r.tag_name.startsWith("desktop-v")
-        );
+
+        // Filter desktop releases and sort by version (highest first)
+        const desktopReleases = releases
+          .filter((r) => r.tag_name.startsWith("desktop-v"))
+          .sort((a, b) => {
+            const versionA = a.tag_name.replace("desktop-v", "");
+            const versionB = b.tag_name.replace("desktop-v", "");
+            return compareVersions(versionB, versionA); // Descending order
+          });
+
+        const desktopRelease = desktopReleases[0];
 
         if (!desktopRelease) {
           // Use fallback if no release found
