@@ -111,6 +111,15 @@ else
 fi
 
 echo ""
+echo "8. Verifying GitHub API returns expected version..."
+API_VERSION=$(curl -s "https://api.github.com/repos/CatsMeow492/nochat.io/releases" | jq -r '[.[] | select(.tag_name | startswith("desktop-v"))] | sort_by(.tag_name | ltrimstr("desktop-v") | split(".") | map(tonumber)) | reverse | .[0].tag_name' 2>/dev/null)
+if [ "$API_VERSION" = "desktop-v$VERSION" ]; then
+    pass "GitHub API highest version matches: $API_VERSION"
+else
+    warn "GitHub API version mismatch: got $API_VERSION, expected desktop-v$VERSION"
+fi
+
+echo ""
 echo "========================================"
 echo "All tests passed! Auto-update infrastructure is healthy."
 echo "========================================"
