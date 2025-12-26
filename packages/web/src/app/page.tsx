@@ -63,6 +63,15 @@ export default function LandingPage() {
   const [joinDialogOpen, setJoinDialogOpen] = useState(false);
   const [meetingCode, setMeetingCode] = useState("");
   const meetingRedirectRef = useRef(false);
+  const [isTauri, setIsTauri] = useState(false);
+
+  // Detect if running in Tauri desktop app
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const hasTauri = !!(window as any).__TAURI_INTERNALS__ || !!(window as any).__TAURI__;
+      setIsTauri(hasTauri);
+    }
+  }, []);
 
   // Debug logging
   useEffect(() => {
@@ -183,41 +192,43 @@ export default function LandingPage() {
 
   return (
     <main className="min-h-screen min-h-dvh flex flex-col w-full max-w-full overflow-x-hidden">
-      {/* Header / Navigation */}
-      <header className="sticky top-0 z-50 w-full border-b border-border/40 bg-background/80 backdrop-blur-lg">
-        <div className="max-w-7xl mx-auto flex items-center justify-between px-4 sm:px-6 h-16">
-          {/* Logo */}
-          <div className="flex items-center gap-2">
-            <span className="text-xl font-bold gradient-text">NoChat</span>
-          </div>
+      {/* Header / Navigation - hidden in desktop app */}
+      {!isTauri && (
+        <header className="sticky top-0 z-50 w-full border-b border-border/40 bg-background/80 backdrop-blur-lg">
+          <div className="max-w-7xl mx-auto flex items-center justify-between px-4 sm:px-6 h-16">
+            {/* Logo */}
+            <div className="flex items-center gap-2">
+              <span className="text-xl font-bold gradient-text">NoChat</span>
+            </div>
 
-          {/* Download Button */}
-          <div className="flex items-center gap-3">
-            <Button
-              variant="default"
-              size="sm"
-              className="gap-2 hidden sm:flex"
-              disabled={downloadLoading}
-              asChild
-            >
-              <a href={downloadUrl} download>
-                <PlatformIcon className="w-4 h-4" />
-                {downloadLoading ? "Loading..." : `Download for ${platformName}`}
-              </a>
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              className="sm:hidden"
-              asChild
-            >
-              <a href={downloadUrl} download>
-                <Download className="w-4 h-4" />
-              </a>
-            </Button>
+            {/* Download Button */}
+            <div className="flex items-center gap-3">
+              <Button
+                variant="default"
+                size="sm"
+                className="gap-2 hidden sm:flex"
+                disabled={downloadLoading}
+                asChild
+              >
+                <a href={downloadUrl} download>
+                  <PlatformIcon className="w-4 h-4" />
+                  {downloadLoading ? "Loading..." : `Download for ${platformName}`}
+                </a>
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="sm:hidden"
+                asChild
+              >
+                <a href={downloadUrl} download>
+                  <Download className="w-4 h-4" />
+                </a>
+              </Button>
+            </div>
           </div>
-        </div>
-      </header>
+        </header>
+      )}
 
       {/* Hero Section */}
       <section className="flex-1 flex flex-col items-center justify-center px-4 sm:px-6 py-16 sm:py-24">
@@ -309,18 +320,20 @@ export default function LandingPage() {
             No account required. No data collected. No compromises.
           </p>
 
-          {/* Download CTA in Hero */}
-          <div className="pt-4">
-            <a
-              href={downloadUrl}
-              download
-              className="inline-flex items-center gap-2 text-primary hover:text-primary/80 transition-colors text-sm font-medium group"
-            >
-              <Download className="w-4 h-4" />
-              <span>Download for {platformName} for the best experience</span>
-              <span className="group-hover:translate-x-1 transition-transform">→</span>
-            </a>
-          </div>
+          {/* Download CTA in Hero - hidden in desktop app */}
+          {!isTauri && (
+            <div className="pt-4">
+              <a
+                href={downloadUrl}
+                download
+                className="inline-flex items-center gap-2 text-primary hover:text-primary/80 transition-colors text-sm font-medium group"
+              >
+                <Download className="w-4 h-4" />
+                <span>Download for {platformName} for the best experience</span>
+                <span className="group-hover:translate-x-1 transition-transform">→</span>
+              </a>
+            </div>
+          )}
         </div>
       </section>
 
@@ -419,63 +432,65 @@ export default function LandingPage() {
         </div>
       </section>
 
-      {/* App Download / CTA Section */}
-      <section id="download" className="py-16 sm:py-24 px-4 border-t border-border bg-card/30 scroll-mt-16">
-        <div className="max-w-4xl mx-auto text-center">
-          <h2 className="text-2xl sm:text-3xl md:text-4xl font-bold mb-4">
-            Get NoChat
-          </h2>
-          <p className="text-sm sm:text-base text-muted-foreground max-w-xl mx-auto mb-8 px-2">
-            Available on macOS, Windows, and Linux. Take your private conversations
-            with you everywhere.
-          </p>
+      {/* App Download / CTA Section - hidden in desktop app */}
+      {!isTauri && (
+        <section id="download" className="py-16 sm:py-24 px-4 border-t border-border bg-card/30 scroll-mt-16">
+          <div className="max-w-4xl mx-auto text-center">
+            <h2 className="text-2xl sm:text-3xl md:text-4xl font-bold mb-4">
+              Get NoChat
+            </h2>
+            <p className="text-sm sm:text-base text-muted-foreground max-w-xl mx-auto mb-8 px-2">
+              Available on macOS, Windows, and Linux. Take your private conversations
+              with you everywhere.
+            </p>
 
-          {/* Desktop Downloads */}
-          <div className="mb-8">
-            <DownloadButtons />
-          </div>
+            {/* Desktop Downloads */}
+            <div className="mb-8">
+              <DownloadButtons />
+            </div>
 
-          {/* Mobile App Store Badges - Placeholders */}
-          <div className="flex flex-col sm:flex-row gap-4 justify-center items-center mb-8">
-            {/* iOS App Store Badge Placeholder */}
-            <a
-              href="#"
-              className="inline-flex items-center gap-3 glass rounded-xl px-6 py-4 hover:border-primary/30 transition-colors group opacity-60"
-              aria-label="Download on the App Store (Coming Soon)"
+            {/* Mobile App Store Badges - Placeholders */}
+            <div className="flex flex-col sm:flex-row gap-4 justify-center items-center mb-8">
+              {/* iOS App Store Badge Placeholder */}
+              <a
+                href="#"
+                className="inline-flex items-center gap-3 glass rounded-xl px-6 py-4 hover:border-primary/30 transition-colors group opacity-60"
+                aria-label="Download on the App Store (Coming Soon)"
+              >
+                <Smartphone className="w-8 h-8 text-muted-foreground group-hover:text-foreground transition-colors" />
+                <div className="text-left">
+                  <p className="text-xs text-muted-foreground">Coming soon on</p>
+                  <p className="text-base font-semibold">App Store</p>
+                </div>
+              </a>
+
+              {/* Google Play Badge Placeholder */}
+              <a
+                href="#"
+                className="inline-flex items-center gap-3 glass rounded-xl px-6 py-4 hover:border-primary/30 transition-colors group opacity-60"
+                aria-label="Get it on Google Play (Coming Soon)"
+              >
+                <Smartphone className="w-8 h-8 text-muted-foreground group-hover:text-foreground transition-colors" />
+                <div className="text-left">
+                  <p className="text-xs text-muted-foreground">Coming soon on</p>
+                  <p className="text-base font-semibold">Google Play</p>
+                </div>
+              </a>
+            </div>
+
+            {/* Web App CTA */}
+            <Button
+              size="lg"
+              onClick={() => router.push("/signin")}
+              variant="outline"
+              className="gap-2 px-8 py-6 text-lg"
             >
-              <Smartphone className="w-8 h-8 text-muted-foreground group-hover:text-foreground transition-colors" />
-              <div className="text-left">
-                <p className="text-xs text-muted-foreground">Coming soon on</p>
-                <p className="text-base font-semibold">App Store</p>
-              </div>
-            </a>
-
-            {/* Google Play Badge Placeholder */}
-            <a
-              href="#"
-              className="inline-flex items-center gap-3 glass rounded-xl px-6 py-4 hover:border-primary/30 transition-colors group opacity-60"
-              aria-label="Get it on Google Play (Coming Soon)"
-            >
-              <Smartphone className="w-8 h-8 text-muted-foreground group-hover:text-foreground transition-colors" />
-              <div className="text-left">
-                <p className="text-xs text-muted-foreground">Coming soon on</p>
-                <p className="text-base font-semibold">Google Play</p>
-              </div>
-            </a>
+              <Globe className="w-5 h-5" />
+              Use NoChat on Web
+            </Button>
           </div>
-
-          {/* Web App CTA */}
-          <Button
-            size="lg"
-            onClick={() => router.push("/signin")}
-            variant="outline"
-            className="gap-2 px-8 py-6 text-lg"
-          >
-            <Globe className="w-5 h-5" />
-            Use NoChat on Web
-          </Button>
-        </div>
-      </section>
+        </section>
+      )}
 
       {/* Footer */}
       <footer className="py-8 sm:py-12 px-4 border-t border-border">
