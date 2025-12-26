@@ -16,12 +16,12 @@
     "mobile:android": "npm run build:mobile && npx cap sync android && npx cap open android"
   },
   "dependencies": {
+    "@capacitor-community/contacts": "^7.0.0",
     "@capacitor/android": "^7.4.4",
     "@capacitor/app": "^7.1.1",
     "@capacitor/camera": "^7.0.3",
     "@capacitor/cli": "^7.4.4",
     "@capacitor/core": "^7.4.4",
-    "@capacitor-community/contacts": "^7.0.0",
     "@capacitor/haptics": "^7.0.3",
     "@capacitor/ios": "^7.4.4",
     "@capacitor/keyboard": "^7.0.4",
@@ -46,6 +46,7 @@
     "@tanstack/react-query": "^5.90.12",
     "@tanstack/react-virtual": "^3.13.13",
     "@tauri-apps/api": "^2.9.1",
+    "@tauri-apps/plugin-process": "^2.3.1",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "idb": "^8.0.3",

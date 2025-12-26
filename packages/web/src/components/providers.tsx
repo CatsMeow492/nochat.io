@@ -8,6 +8,7 @@ import { AuthInitializer } from "@/components/auth-initializer";
 import { CryptoInitializer } from "@/components/crypto-initializer";
 import { SentryInitializer } from "@/components/sentry-initializer";
 import { TauriOAuthHandler } from "@/components/tauri-oauth-handler";
+import { UpdateBanner } from "@/components/update-banner";
 import { SentryErrorBoundary } from "@/lib/sentry";
 
 /**
@@ -61,6 +62,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
             <AuthInitializer />
             <CryptoInitializer />
             <TauriOAuthHandler />
+            <UpdateBanner />
             {children}
           </TooltipProvider>
         </ThemeProvider>
