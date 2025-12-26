@@ -40,7 +40,7 @@ export type Platform = "macos" | "windows" | "linux" | null;
 
 // Fallback URLs in case GitHub API is rate limited
 // These are updated whenever we know the current release version
-const FALLBACK_VERSION = "1.0.14";
+const FALLBACK_VERSION = "1.0.15";
 const FALLBACK_BASE_URL = `https://github.com/${GITHUB_OWNER}/${GITHUB_REPO}/releases/download/desktop-v${FALLBACK_VERSION}`;
 const FALLBACK_DOWNLOAD_INFO: DownloadInfo = {
   version: FALLBACK_VERSION,
