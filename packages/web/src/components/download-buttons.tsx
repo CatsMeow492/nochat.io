@@ -5,7 +5,7 @@ import { Apple, Monitor, Download } from "lucide-react";
 import { useDownload } from "@/hooks";
 
 export function DownloadButtons() {
-  const { downloadInfo, loading, error, platform, releasesUrl } = useDownload();
+  const { downloadInfo, loading, platform } = useDownload();
 
   if (loading) {
     return (
@@ -18,21 +18,9 @@ export function DownloadButtons() {
     );
   }
 
-  if (error || !downloadInfo) {
-    // Fallback: direct link to GitHub releases
-    return (
-      <div className="flex flex-col items-center gap-4">
-        <Button size="lg" asChild className="gap-3 px-8 py-6 text-lg">
-          <a href={releasesUrl} target="_blank" rel="noopener noreferrer">
-            <Download className="w-5 h-5" />
-            Download Desktop App
-          </a>
-        </Button>
-        <p className="text-xs text-muted-foreground">
-          Available for macOS, Windows, and Linux
-        </p>
-      </div>
-    );
+  // downloadInfo should always be available now (with fallback)
+  if (!downloadInfo) {
+    return null;
   }
 
   // Get the primary download based on user's platform
