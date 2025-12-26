@@ -17,7 +17,7 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
@@ -29,7 +29,9 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { useQuery } from "@tanstack/react-query";
 import { useAuth, useConversations, usePendingRequests } from "@/hooks";
+import { api } from "@/lib/api";
 import { useCryptoStore } from "@/stores";
 import { cn } from "@/lib/utils";
 import { NewConversationDialog } from "./new-conversation-dialog";
@@ -44,6 +46,14 @@ function SidebarContent() {
   const { status: encryptionStatus, identityFingerprint } = useCryptoStore();
   const [searchQuery, setSearchQuery] = useState("");
   const [newConversationOpen, setNewConversationOpen] = useState(false);
+
+  // Fetch user profile for avatar
+  const { data: profileData } = useQuery({
+    queryKey: ["myProfile"],
+    queryFn: () => api.getMyProfile(),
+    enabled: !!user,
+    staleTime: 60000,
+  });
 
   const handleCreateConversation = async (participantIds: string[]) => {
     createConversation(
@@ -236,6 +246,9 @@ function SidebarContent() {
           <DropdownMenuTrigger asChild>
             <button className="w-full flex items-center gap-3 p-2 rounded-lg hover:bg-secondary/50 transition-colors">
               <Avatar className="w-9 h-9">
+                {profileData?.avatar_url && (
+                  <AvatarImage src={profileData.avatar_url} alt={user?.username || "User"} />
+                )}
                 <AvatarFallback className="bg-primary/20 text-primary">
                   {user?.username?.[0]?.toUpperCase() || (
                     <User className="w-4 h-4" />

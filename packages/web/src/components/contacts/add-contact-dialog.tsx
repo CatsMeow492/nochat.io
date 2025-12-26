@@ -34,6 +34,22 @@ import { useInvites, useContacts } from "@/hooks/use-contacts";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
+// Get the web app URL for invite links (always use production URL in desktop app)
+function getWebAppUrl(): string {
+  if (typeof window === "undefined") return "https://nochat.io";
+
+  // Check if we're in the Tauri desktop app
+  const isTauri = !!(window as any).__TAURI_INTERNALS__ || !!(window as any).__TAURI__;
+
+  if (isTauri) {
+    // Always use production URL for invite links in desktop app
+    return "https://nochat.io";
+  }
+
+  // In web browser, use current origin
+  return window.location.origin;
+}
+
 interface User {
   id: string;
   username: string;
@@ -252,8 +268,7 @@ function InviteLinkTab() {
   };
 
   const getInviteUrl = (code: string) => {
-    if (typeof window === "undefined") return "";
-    return `${window.location.origin}/invite/${code}`;
+    return `${getWebAppUrl()}/invite/${code}`;
   };
 
   const handleCopy = async (code: string) => {
@@ -393,8 +408,7 @@ function QRCodeTab() {
   };
 
   const getInviteUrl = (code: string) => {
-    if (typeof window === "undefined") return "";
-    return `${window.location.origin}/invite/${code}`;
+    return `${getWebAppUrl()}/invite/${code}`;
   };
 
   if (loading) {
