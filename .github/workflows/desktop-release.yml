@@ -232,7 +232,11 @@ jobs:
           DMG="target/universal-apple-darwin/release/bundle/dmg/NoChat_${VERSION}_universal.dmg"
 
           # Create signature using npx (tauri-cli is installed as devDependency)
-          npx tauri signer sign --private-key "$TAURI_PRIVATE_KEY" --password "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" "$DMG" > "${DMG}.sig"
+          # The signer automatically creates a .sig file next to the input file
+          npx tauri signer sign --private-key "$TAURI_PRIVATE_KEY" --password "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" "$DMG"
+
+          # Verify signature file was created
+          ls -la "${DMG}.sig"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -390,7 +394,11 @@ jobs:
           TARGET_PATH="$(dirname "$APPIMAGE")/$TARGET_NAME"
 
           # Create signature using npx (tauri-cli is installed as devDependency)
-          npx tauri signer sign --private-key "$TAURI_PRIVATE_KEY" --password "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" "$APPIMAGE" > "${APPIMAGE}.sig"
+          # The signer automatically creates a .sig file next to the input file
+          npx tauri signer sign --private-key "$TAURI_PRIVATE_KEY" --password "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" "$APPIMAGE"
+
+          # Verify signature file was created
+          ls -la "${APPIMAGE}.sig"
 
           # Rename with version (skip if already correctly named)
           if [ "$APPIMAGE" != "$TARGET_PATH" ]; then
