@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { useQueryClient } from "@tanstack/react-query";
 import { Eye, EyeOff, Lock, Mail, ArrowLeft, Loader2, Phone } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -51,6 +52,7 @@ function FacebookIcon({ className }: { className?: string }) {
 
 export default function SignInPage() {
   const router = useRouter();
+  const queryClient = useQueryClient();
   const { signIn, isSigningIn, signInError, signInAnonymous, isSigningInAnonymous } = useAuth();
   const { setUser } = useAuthStore();
 
@@ -208,7 +210,9 @@ export default function SignInPage() {
     setPhoneVerifying(true);
     try {
       const response = await api.verifyPhoneCode(phoneNumber, verificationCode);
-      // Update auth store and redirect
+      // Store token first
+      localStorage.setItem("token", response.token);
+      // Update auth store
       setUser(
         {
           id: response.user.id,
@@ -220,7 +224,8 @@ export default function SignInPage() {
         },
         response.token
       );
-      localStorage.setItem("token", response.token);
+      // Set query data directly to avoid race condition with /me API call
+      queryClient.setQueryData(["me"], { user: response.user });
       router.push("/");
     } catch (err: any) {
       setPhoneError(err.message || "Invalid verification code");
