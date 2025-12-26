@@ -295,8 +295,40 @@ func (s *Server) setupRouter() *mux.Router {
 // Middleware
 
 func corsMiddleware(next http.Handler) http.Handler {
+	// Allowed origins for CORS
+	allowedOrigins := map[string]bool{
+		"https://nochat.io":       true,
+		"https://www.nochat.io":   true,
+		"http://localhost:3000":   true,
+		"http://localhost:3001":   true,
+		"http://localhost:1420":   true, // Tauri dev default
+		"tauri://localhost":       true, // Tauri 2.x macOS/Linux
+		"https://tauri.localhost": true, // Tauri 2.x Windows
+		"http://tauri.localhost":  true, // Tauri fallback
+	}
+
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
+		origin := r.Header.Get("Origin")
+
+		// Check if origin is allowed
+		if allowedOrigins[origin] {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Access-Control-Allow-Credentials", "true")
+		} else if origin == "" {
+			// No origin header (same-origin or non-browser request)
+			w.Header().Set("Access-Control-Allow-Origin", "*")
+		} else if strings.HasPrefix(origin, "tauri://") || strings.HasPrefix(origin, "http://localhost:") || strings.HasPrefix(origin, "https://localhost:") {
+			// Allow any Tauri or localhost origin (for dev flexibility)
+			log.Printf("[CORS] Allowing dynamic origin: %s", origin)
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Access-Control-Allow-Credentials", "true")
+		} else {
+			// Unknown origin - log and still echo it to support credentials
+			log.Printf("[CORS] Unknown origin: %s", origin)
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Access-Control-Allow-Credentials", "true")
+		}
+
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 

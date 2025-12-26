@@ -40,11 +40,11 @@ export type Platform = "macos" | "windows" | "linux" | null;
 
 // Fallback URLs in case GitHub API is rate limited
 // These are updated whenever we know the current release version
-const FALLBACK_VERSION = "1.0.11";
+const FALLBACK_VERSION = "1.0.12";
 const FALLBACK_BASE_URL = `https://github.com/${GITHUB_OWNER}/${GITHUB_REPO}/releases/download/desktop-v${FALLBACK_VERSION}`;
 const FALLBACK_DOWNLOAD_INFO: DownloadInfo = {
   version: FALLBACK_VERSION,
-  macos: { url: `${FALLBACK_BASE_URL}/NoChat_${FALLBACK_VERSION}_universal.dmg`, size: "~30 MB" },
+  macos: { url: `${FALLBACK_BASE_URL}/NoChat_${FALLBACK_VERSION}_aarch64.dmg`, size: "~9 MB" },
   windows: { url: `${FALLBACK_BASE_URL}/NoChat_${FALLBACK_VERSION}_x64-setup.exe`, size: "~30 MB" },
   linux: { url: `${FALLBACK_BASE_URL}/NoChat_${FALLBACK_VERSION}_amd64.AppImage`, size: "~90 MB" },
 };
@@ -134,8 +134,13 @@ export function useDownload() {
 
         const version = desktopRelease.tag_name.replace("desktop-v", "");
 
+        // Try universal first, then aarch64 (Apple Silicon), then x64 (Intel)
         const macosAsset = desktopRelease.assets.find(
           (a) => a.name.includes("universal") && a.name.endsWith(".dmg")
+        ) || desktopRelease.assets.find(
+          (a) => a.name.includes("aarch64") && a.name.endsWith(".dmg")
+        ) || desktopRelease.assets.find(
+          (a) => a.name.includes("x64") && a.name.endsWith(".dmg")
         );
         const windowsAsset = desktopRelease.assets.find(
           (a) => a.name.includes("x64-setup") && a.name.endsWith(".exe")

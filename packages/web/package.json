@@ -8,7 +8,7 @@
     "start": "next start",
     "lint": "eslint",
     "build:mobile": "CAPACITOR_BUILD=true next build",
-    "build:desktop": "cross-env TAURI_BUILD=true next build",
+    "build:desktop": "cross-env TAURI_BUILD=true NEXT_PUBLIC_API_URL=https://nochat-server.fly.dev NEXT_PUBLIC_WS_URL=wss://nochat-server.fly.dev next build",
     "cap:sync": "npx cap sync",
     "cap:ios": "npx cap open ios",
     "cap:android": "npx cap open android",
