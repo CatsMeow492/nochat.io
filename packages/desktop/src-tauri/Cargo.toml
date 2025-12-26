@@ -1,6 +1,6 @@
 [package]
 name = "nochat-desktop"
-version = "1.0.0"
+version = "1.0.14"
 description = "NoChat Desktop - Secure messaging and video conferencing"
 authors = ["NoChat"]
 license = "MIT"
