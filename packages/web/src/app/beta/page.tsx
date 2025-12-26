@@ -47,10 +47,10 @@ export default function BetaPage() {
                       This is the email linked to Google Play on your phone.
                     </p>
                     <a
-                      href="mailto:support@nochat.io?subject=Android%20Beta%20Tester%20Signup&body=Hi%2C%0A%0AI%27d%20like%20to%20join%20the%20NoChat%20Android%20beta%20testing%20program.%0A%0AMy%20Google%20account%20email%3A%20%5BYOUR_GMAIL_HERE%5D%0A%0AThanks!"
+                      href="mailto:taylorm@kindly.fyi?subject=NoChat%20Android%20Beta%20Tester%20Signup&body=Hi%2C%0A%0AI%27d%20like%20to%20join%20the%20NoChat%20Android%20beta%20testing%20program.%0A%0AMy%20Google%20account%20email%3A%20%5BYOUR_GMAIL_HERE%5D%0A%0AThanks!"
                       className="inline-flex items-center gap-2 px-4 py-2 bg-primary text-background rounded-lg hover:bg-primary/90 transition-colors"
                     >
-                      <span>&#9993;</span> Email support@nochat.io
+                      <span>&#9993;</span> Email Us to Join
                     </a>
                   </div>
                 </div>
@@ -172,7 +172,7 @@ export default function BetaPage() {
           <section className="text-center py-8">
             <h2 className="text-xl sm:text-2xl font-semibold mb-4">Ready to Join?</h2>
             <a
-              href="mailto:support@nochat.io?subject=Android%20Beta%20Tester%20Signup&body=Hi%2C%0A%0AI%27d%20like%20to%20join%20the%20NoChat%20Android%20beta%20testing%20program.%0A%0AMy%20Google%20account%20email%3A%20%5BYOUR_GMAIL_HERE%5D%0A%0AThanks!"
+              href="mailto:taylorm@kindly.fyi?subject=NoChat%20Android%20Beta%20Tester%20Signup&body=Hi%2C%0A%0AI%27d%20like%20to%20join%20the%20NoChat%20Android%20beta%20testing%20program.%0A%0AMy%20Google%20account%20email%3A%20%5BYOUR_GMAIL_HERE%5D%0A%0AThanks!"
               className="inline-flex items-center gap-2 px-6 py-3 bg-primary text-background rounded-lg hover:bg-primary/90 transition-colors text-lg font-medium"
             >
               <span>&#9993;</span> Join the Android Beta
