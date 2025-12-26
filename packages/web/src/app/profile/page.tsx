@@ -65,9 +65,9 @@ export default function ProfilePage() {
     }
   }, [isCheckingAuth, isAuthVerified, token, router]);
 
-  // Load profile data
+  // Load profile data - use token presence instead of isAuthVerified to avoid race conditions
   useEffect(() => {
-    if (!isAuthVerified) return;
+    if (!token) return;
 
     const loadProfile = async () => {
       try {
@@ -103,7 +103,7 @@ export default function ProfilePage() {
     };
 
     loadProfile();
-  }, [isAuthVerified]);
+  }, [token]);
 
   const hasChanges = () => {
     if (!originalValues) return false;
