@@ -1,0 +1,28 @@
+# NoChat Desktop Update Server
+#
+# Cloudflare Worker that serves update manifests for the Tauri auto-updater.
+#
+# Deployment:
+#   npx wrangler deploy
+#
+# Environment Variables (set via `wrangler secret put`):
+#   GITHUB_TOKEN: Personal access token for fetching release info (optional, increases rate limits)
+
+name = "nochat-update-server"
+main = "src/index.ts"
+compatibility_date = "2024-01-01"
+
+# Custom domain: releases.nochat.io
+routes = [
+  { pattern = "releases.nochat.io/*", zone_name = "nochat.io" }
+]
+
+# Cache settings
+[vars]
+GITHUB_REPO = "CatsMeow492/nochat.io"
+CACHE_TTL = "300"  # 5 minutes
+
+# KV namespace for caching releases (optional, improves performance)
+# [[kv_namespaces]]
+# binding = "RELEASES_CACHE"
+# id = "your-kv-namespace-id"
