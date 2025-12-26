@@ -32,7 +32,7 @@ const RELATIONSHIP_STATUS_OPTIONS: { value: RelationshipStatus; label: string }[
 
 export default function ProfilePage() {
   const router = useRouter();
-  const { isAuthVerified, isLoading: isCheckingAuth } = useAuth();
+  const { user, token, isAuthVerified, isLoading: isCheckingAuth } = useAuth();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [loading, setLoading] = useState(true);
@@ -56,11 +56,14 @@ export default function ProfilePage() {
   const [originalValues, setOriginalValues] = useState<any>(null);
 
   // Redirect if not authenticated
+  // Wait for auth check to complete AND confirm no user/token before redirecting
   useEffect(() => {
-    if (!isCheckingAuth && !isAuthVerified) {
+    // Only redirect if auth check is complete and we're definitely not authenticated
+    // Check both isAuthVerified (API verified) and token (local state) to avoid race conditions
+    if (!isCheckingAuth && !isAuthVerified && !token) {
       router.push("/signin");
     }
-  }, [isCheckingAuth, isAuthVerified, router]);
+  }, [isCheckingAuth, isAuthVerified, token, router]);
 
   // Load profile data
   useEffect(() => {
