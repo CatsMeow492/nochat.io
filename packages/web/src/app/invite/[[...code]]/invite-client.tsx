@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useRouter, useParams } from "next/navigation";
 import Link from "next/link";
 import { Check, X, Loader2, UserPlus, Shield, ArrowRight } from "lucide-react";
@@ -9,10 +9,12 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { useInviteInfo } from "@/hooks/use-contacts";
 import { useAuth } from "@/hooks";
 
-export default function InviteAcceptPage() {
+export function InviteClient() {
   const router = useRouter();
   const params = useParams();
-  const code = params?.code as string;
+  // With optional catch-all [[...code]], params.code is an array
+  const codeArray = params?.code as string[] | undefined;
+  const code = codeArray?.[0] || "";
   const { user, isLoading: authLoading } = useAuth();
   const { info, loading, error, acceptInvite } = useInviteInfo(code);
   const [accepting, setAccepting] = useState(false);
@@ -39,6 +41,26 @@ export default function InviteAcceptPage() {
       setAccepting(false);
     }
   };
+
+  // Handle missing code (user visited /invite without a code)
+  if (!code) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-background p-4">
+        <div className="max-w-md w-full text-center">
+          <div className="w-16 h-16 rounded-full bg-destructive/10 flex items-center justify-center mx-auto mb-6">
+            <X className="w-8 h-8 text-destructive" />
+          </div>
+          <h1 className="text-2xl font-bold mb-2">No Invite Code</h1>
+          <p className="text-muted-foreground mb-6">
+            Please use a valid invite link to connect with someone.
+          </p>
+          <Button asChild>
+            <Link href="/">Return Home</Link>
+          </Button>
+        </div>
+      </div>
+    );
+  }
 
   if (loading || authLoading) {
     return (
