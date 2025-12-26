@@ -1,9 +1,10 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { X, Download, Zap, Shield, Monitor } from "lucide-react";
+import { X, Download, Zap } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { useDownload } from "@/hooks/use-download";
 
 const BANNER_DISMISSED_KEY = "nochat-desktop-banner-dismissed";
 const BANNER_DISMISS_DURATION = 7 * 24 * 60 * 60 * 1000; // 7 days
@@ -20,6 +21,7 @@ interface Props {
 export function DesktopAppBanner({ className }: Props) {
   const [dismissed, setDismissed] = useState(true); // Start hidden to avoid flash
   const [isTauri, setIsTauri] = useState(false);
+  const { getDownloadUrl, getPlatformName } = useDownload();
 
   useEffect(() => {
     // Check if we're in Tauri desktop app
@@ -81,9 +83,9 @@ export function DesktopAppBanner({ className }: Props) {
             className="gap-2 h-8"
             asChild
           >
-            <a href="/#download" onClick={() => window.scrollTo(0, 0)}>
+            <a href={getDownloadUrl()} target="_blank" rel="noopener noreferrer">
               <Download className="w-3.5 h-3.5" />
-              Download
+              Download for {getPlatformName()}
             </a>
           </Button>
         </div>
