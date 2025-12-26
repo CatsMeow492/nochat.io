@@ -29,3 +29,9 @@ dist/
 
 # Playwright MCP (screenshots, test artifacts)
 .playwright-mcp/
+
+# Playwright E2E test artifacts
+packages/web/e2e/playwright-report/
+packages/web/e2e/test-results/
+packages/web/playwright-report/
+packages/web/test-results/

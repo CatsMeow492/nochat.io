@@ -1,0 +1,130 @@
+name: E2E Tests
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - "packages/web/**"
+      - ".github/workflows/e2e-tests.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "packages/web/**"
+      - ".github/workflows/e2e-tests.yml"
+
+env:
+  NEXT_PUBLIC_API_URL: http://localhost:8080
+
+jobs:
+  e2e-tests:
+    timeout-minutes: 30
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: nochat
+          POSTGRES_PASSWORD: nochat
+          POSTGRES_DB: nochat_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: packages/web/package-lock.json
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.20"
+
+      - name: Install frontend dependencies
+        run: |
+          cd packages/web
+          npm ci
+
+      - name: Install Playwright browsers
+        run: |
+          cd packages/web
+          npx playwright install --with-deps chromium
+
+      - name: Build backend
+        run: |
+          cd packages/server
+          go build -o bin/server cmd/server/main.go
+
+      - name: Start backend server
+        env:
+          DATABASE_URL: postgres://nochat:nochat@localhost:5432/nochat_test?sslmode=disable
+          REDIS_URL: localhost:6379
+          S3_ENDPOINT: ""
+          S3_ACCESS_KEY: ""
+          S3_SECRET_KEY: ""
+          S3_BUCKET: ""
+        run: |
+          cd packages/server
+          ./bin/server &
+          # Wait for server to be ready
+          for i in {1..30}; do
+            curl -s http://localhost:8080/health && break
+            echo "Waiting for server... ($i)"
+            sleep 1
+          done
+
+      - name: Seed test users
+        run: |
+          # Create test users via API
+          curl -X POST http://localhost:8080/api/auth/signup \
+            -H "Content-Type: application/json" \
+            -d '{"username":"e2e-tester","email":"e2e-test@nochat.io","password":"TestPassword123!"}' || true
+
+          curl -X POST http://localhost:8080/api/auth/signup \
+            -H "Content-Type: application/json" \
+            -d '{"username":"e2e-tester-2","email":"e2e-test-2@nochat.io","password":"TestPassword456!"}' || true
+
+      - name: Run Playwright tests
+        run: |
+          cd packages/web
+          npx playwright test --project=chromium
+        env:
+          E2E_BASE_URL: http://localhost:3000
+          NEXT_PUBLIC_API_URL: http://localhost:8080
+
+      - name: Upload Playwright report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: playwright-report
+          path: packages/web/e2e/playwright-report/
+          retention-days: 7
+
+      - name: Upload test traces
+        uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-traces
+          path: packages/web/e2e/test-results/
+          retention-days: 7
