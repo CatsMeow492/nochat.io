@@ -169,12 +169,23 @@ jobs:
           APP="packages/desktop/target/universal-apple-darwin/release/bundle/macos/NoChat.app"
           DMG_DIR="packages/desktop/target/universal-apple-darwin/release/bundle/dmg"
           DMG_NAME="NoChat_${VERSION}_universal.dmg"
+          STAGING_DIR="packages/desktop/target/dmg-staging"
 
           mkdir -p "$DMG_DIR"
+          mkdir -p "$STAGING_DIR"
+
+          echo "Creating DMG staging folder with Applications symlink..."
+          # Copy app to staging
+          cp -R "$APP" "$STAGING_DIR/"
+          # Create symlink to Applications folder
+          ln -s /Applications "$STAGING_DIR/Applications"
 
           echo "Creating DMG..."
-          # Create a temporary DMG
-          hdiutil create -volname "NoChat" -srcfolder "$APP" -ov -format UDZO "$DMG_DIR/$DMG_NAME"
+          # Create DMG from staging folder (includes both app and Applications symlink)
+          hdiutil create -volname "NoChat" -srcfolder "$STAGING_DIR" -ov -format UDZO "$DMG_DIR/$DMG_NAME"
+
+          # Clean up staging
+          rm -rf "$STAGING_DIR"
 
           echo "Signing DMG..."
           # Unlock keychain
