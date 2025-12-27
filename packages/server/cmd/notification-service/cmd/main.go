@@ -12,8 +12,8 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/redis/go-redis/v9"
-	"gitlab.com/secp/services/backend/cmd/notification-service/internal/config"
-	"gitlab.com/secp/services/backend/cmd/notification-service/internal/models"
+	"github.com/kindlyrobotics/nochat/cmd/notification-service/internal/config"
+	"github.com/kindlyrobotics/nochat/cmd/notification-service/internal/models"
 )
 
 // Define a new type in the current package

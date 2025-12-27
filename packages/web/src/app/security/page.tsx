@@ -207,7 +207,7 @@ export default function SecurityPage() {
                 <span className="text-primary mt-1">&#8226;</span>
                 <span>Full source code available on{" "}
                   <a
-                    href="https://github.com/CatsMeow492/nochat.io"
+                    href="https://github.com/kindlyrobotics/nochat"
                     target="_blank"
                     rel="noopener noreferrer"
                     className="text-primary hover:underline"

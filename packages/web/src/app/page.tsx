@@ -562,7 +562,7 @@ export default function LandingPage() {
                 Security
               </Link>
               <a
-                href="https://github.com/CatsMeow492/nochat.io"
+                href="https://github.com/kindlyrobotics/nochat"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="hover:text-foreground transition-colors"

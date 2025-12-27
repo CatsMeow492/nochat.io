@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"os"
 
-	"gitlab.com/secp/services/backend/pkg/handlers"
+	"github.com/kindlyrobotics/nochat/pkg/handlers"
 )
 
 func main() {

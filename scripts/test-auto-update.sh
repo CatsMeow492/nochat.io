@@ -9,7 +9,7 @@ echo "NoChat Auto-Update Infrastructure Test"
 echo "========================================"
 echo ""
 
-LATEST_JSON_URL="https://github.com/CatsMeow492/nochat.io/releases/latest/download/latest.json"
+LATEST_JSON_URL="https://github.com/kindlyrobotics/nochat/releases/latest/download/latest.json"
 
 # Colors
 GREEN='\033[0;32m'
@@ -98,7 +98,7 @@ done
 
 echo ""
 echo "7. Checking macOS DMG signature file..."
-DMG_SIG_URL="https://github.com/CatsMeow492/nochat.io/releases/download/desktop-v${VERSION}/NoChat_${VERSION}_universal.dmg.sig"
+DMG_SIG_URL="https://github.com/kindlyrobotics/nochat/releases/download/desktop-v${VERSION}/NoChat_${VERSION}_universal.dmg.sig"
 DMG_SIG=$(curl -sL "$DMG_SIG_URL" 2>/dev/null)
 if echo "$DMG_SIG" | grep -q "^dW50cnVzdGVk"; then
     if echo "$DMG_SIG" | grep -q "Your file was signed"; then

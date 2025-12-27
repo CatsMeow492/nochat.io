@@ -1,7 +1,14 @@
 {
-  "name": "web",
+  "name": "@kindlyrobotics/nochat-web",
   "version": "0.1.0",
   "private": true,
+  "description": "NoChat web application - E2EE messaging without phone numbers",
+  "author": "Kindly Robotics <hello@kindly.fyi>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/kindlyrobotics/nochat"
+  },
   "scripts": {
     "dev": "next dev",
     "build": "next build",

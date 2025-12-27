@@ -8,7 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
-	"gitlab.com/secp/services/backend/internal/models"
+	"github.com/kindlyrobotics/nochat/internal/models"
 )
 
 type Service struct {

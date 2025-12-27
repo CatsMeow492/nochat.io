@@ -5,7 +5,7 @@ import (
 	"net/http"
 
 	"github.com/redis/go-redis/v9"
-	"gitlab.com/secp/services/backend/cmd/room-service/internal/models"
+	"github.com/kindlyrobotics/nochat/cmd/room-service/internal/models"
 )
 
 // CreateRoom handles the creation of a new room.

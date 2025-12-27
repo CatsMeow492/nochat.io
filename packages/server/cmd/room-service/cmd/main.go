@@ -10,9 +10,9 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/redis/go-redis/v9"
-	"gitlab.com/secp/services/backend/cmd/room-service/internal/config"
-	"gitlab.com/secp/services/backend/cmd/room-service/internal/handlers"
-	"gitlab.com/secp/services/backend/cmd/room-service/internal/models"
+	"github.com/kindlyrobotics/nochat/cmd/room-service/internal/config"
+	"github.com/kindlyrobotics/nochat/cmd/room-service/internal/handlers"
+	"github.com/kindlyrobotics/nochat/cmd/room-service/internal/models"
 )
 
 func main() {

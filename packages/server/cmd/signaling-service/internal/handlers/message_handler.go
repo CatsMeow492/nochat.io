@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"gitlab.com/secp/services/backend/cmd/signaling-service/internal/models"
+	"github.com/kindlyrobotics/nochat/cmd/signaling-service/internal/models"
 )
 
 type MessageHandler struct {

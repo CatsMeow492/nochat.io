@@ -335,6 +335,44 @@ To create a new migration:
 - Publish: Automatic in `CreateMessage()`
 - Receive: `pubsub.Receive(ctx)` in goroutine
 
+### Error Tracking (Sentry)
+
+NoChat uses Sentry for crash reporting with strict privacy controls.
+
+**Configuration:**
+- Located in `packages/web/src/lib/sentry.ts`
+- Initialization via `SentryInitializer` component in `providers.tsx`
+- Error boundary wraps the entire application
+
+**Privacy Guarantees:**
+- `sendDefaultPii: false` - No automatic PII collection
+- No IP addresses captured
+- No email addresses captured
+- No message content captured
+- Breadcrumbs filtered to exclude messaging endpoints
+- Request body/cookies stripped from error reports
+
+**Environment Variables:**
+```bash
+# Set in Vercel/production environment
+NEXT_PUBLIC_SENTRY_DSN=https://your-dsn@o123456.ingest.sentry.io/1234567
+NEXT_PUBLIC_APP_VERSION=1.0.0
+```
+
+**Usage:**
+```typescript
+import { captureError, addBreadcrumb, setSentryUser } from "@/lib/sentry";
+
+// Capture errors with safe context (no PII)
+captureError(error, { feature: "video-call", action: "connect" });
+
+// Add breadcrumbs for debugging (no PII)
+addBreadcrumb("User joined room", "navigation");
+
+// Set anonymous user for grouping (UUID only, no email)
+setSentryUser(userId);
+```
+
 ## Deployment Architecture
 
 **Local:** docker-compose with 4 containers (app, postgres, redis, minio)

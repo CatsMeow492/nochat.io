@@ -12,7 +12,7 @@ import (
 
 	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
-	"gitlab.com/secp/services/backend/internal/models"
+	"github.com/kindlyrobotics/nochat/internal/models"
 )
 
 var (

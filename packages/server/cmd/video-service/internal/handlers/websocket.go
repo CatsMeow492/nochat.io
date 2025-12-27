@@ -5,7 +5,7 @@ import (
 	"net/http"
 
 	"github.com/gorilla/websocket"
-	"gitlab.com/secp/services/backend/cmd/video-service/internal/models"
+	"github.com/kindlyrobotics/nochat/cmd/video-service/internal/models"
 )
 
 var upgrader = websocket.Upgrader{

@@ -1,7 +1,14 @@
 {
-  "name": "nochat-desktop",
+  "name": "@kindlyrobotics/nochat-desktop",
   "version": "1.0.0",
   "private": true,
+  "description": "NoChat desktop application - E2EE messaging without phone numbers",
+  "author": "Kindly Robotics <hello@kindly.fyi>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/kindlyrobotics/nochat"
+  },
   "scripts": {
     "build:frontend": "npm run --prefix ../web build:desktop && shx mkdir -p dist && shx cp -r ../web/out/* dist/",
     "tauri": "tauri",

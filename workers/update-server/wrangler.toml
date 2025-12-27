@@ -19,7 +19,7 @@ routes = [
 
 # Cache settings
 [vars]
-GITHUB_REPO = "CatsMeow492/nochat.io"
+GITHUB_REPO = "kindlyrobotics/nochat"
 CACHE_TTL = "300"  # 5 minutes
 
 # KV namespace for caching releases (optional, improves performance)

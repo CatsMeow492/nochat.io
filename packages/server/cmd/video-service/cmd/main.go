@@ -9,9 +9,9 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/gorilla/websocket"
-	"gitlab.com/secp/services/backend/cmd/video-service/internal/config"
-	"gitlab.com/secp/services/backend/cmd/video-service/internal/handlers"
-	"gitlab.com/secp/services/backend/cmd/video-service/internal/models"
+	"github.com/kindlyrobotics/nochat/cmd/video-service/internal/config"
+	"github.com/kindlyrobotics/nochat/cmd/video-service/internal/handlers"
+	"github.com/kindlyrobotics/nochat/cmd/video-service/internal/models"
 )
 
 var upgrader = websocket.Upgrader{

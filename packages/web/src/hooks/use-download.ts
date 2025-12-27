@@ -2,8 +2,8 @@
 
 import { useEffect, useState } from "react";
 
-const GITHUB_OWNER = "CatsMeow492";
-const GITHUB_REPO = "nochat.io";
+const GITHUB_OWNER = "kindlyrobotics";
+const GITHUB_REPO = "nochat";
 const CACHE_KEY = "nochat-download-info";
 const CACHE_TTL = 1000 * 60 * 60; // 1 hour cache
 

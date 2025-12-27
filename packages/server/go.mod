@@ -1,4 +1,4 @@
-module gitlab.com/secp/services/backend
+module github.com/kindlyrobotics/nochat
 
 go 1.20
 

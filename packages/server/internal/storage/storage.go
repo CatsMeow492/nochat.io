@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"gitlab.com/secp/services/backend/internal/models"
+	"github.com/kindlyrobotics/nochat/internal/models"
 
 	// Using minio-go for S3-compatible storage
 	"github.com/minio/minio-go/v7"

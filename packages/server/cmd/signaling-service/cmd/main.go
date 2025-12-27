@@ -11,8 +11,8 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/redis/go-redis/v9"
-	"gitlab.com/secp/services/backend/cmd/signaling-service/internal/handlers"
-	"gitlab.com/secp/services/backend/cmd/signaling-service/internal/models"
+	"github.com/kindlyrobotics/nochat/cmd/signaling-service/internal/handlers"
+	"github.com/kindlyrobotics/nochat/cmd/signaling-service/internal/models"
 )
 
 var upgrader = websocket.Upgrader{

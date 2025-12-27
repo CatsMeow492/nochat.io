@@ -27,7 +27,7 @@ This guide covers how to thoroughly test the desktop app auto-update system.
 1. **Download an older release** (e.g., v1.0.13):
    ```bash
    # Download v1.0.13
-   curl -L "https://github.com/CatsMeow492/nochat.io/releases/download/desktop-v1.0.13/NoChat_1.0.13_universal.dmg" -o NoChat_old.dmg
+   curl -L "https://github.com/kindlyrobotics/nochat/releases/download/desktop-v1.0.13/NoChat_1.0.13_universal.dmg" -o NoChat_old.dmg
    ```
 
 2. **Install the older version**:
@@ -108,14 +108,14 @@ For development testing with custom version numbers:
 
 ```bash
 # Check the latest.json is accessible and well-formed
-curl -sL "https://github.com/CatsMeow492/nochat.io/releases/latest/download/latest.json" | jq .
+curl -sL "https://github.com/kindlyrobotics/nochat/releases/latest/download/latest.json" | jq .
 
 # Verify signature format (should be base64, no CLI output text)
-curl -sL "https://github.com/CatsMeow492/nochat.io/releases/latest/download/latest.json" | jq -r '.platforms."darwin-aarch64".signature' | head -c 100
+curl -sL "https://github.com/kindlyrobotics/nochat/releases/latest/download/latest.json" | jq -r '.platforms."darwin-aarch64".signature' | head -c 100
 # Should start with: dW50cnVzdGVkIGNvbW1lbnQ6
 
 # Check that DMG is downloadable
-curl -sIL "https://github.com/CatsMeow492/nochat.io/releases/download/desktop-v1.0.15/NoChat_1.0.15_universal.dmg" | grep "HTTP/"
+curl -sIL "https://github.com/kindlyrobotics/nochat/releases/download/desktop-v1.0.15/NoChat_1.0.15_universal.dmg" | grep "HTTP/"
 # Should show: HTTP/2 200
 ```
 

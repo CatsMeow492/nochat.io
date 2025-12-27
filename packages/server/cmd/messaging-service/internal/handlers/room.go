@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"gitlab.com/secp/services/backend/cmd/messaging-service/internal/models"
+	"github.com/kindlyrobotics/nochat/cmd/messaging-service/internal/models"
 )
 
 func CreateRoom(w http.ResponseWriter, r *http.Request) {

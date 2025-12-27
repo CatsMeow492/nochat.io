@@ -15,7 +15,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"gitlab.com/secp/services/backend/internal/models"
+	"github.com/kindlyrobotics/nochat/internal/models"
 )
 
 var (
